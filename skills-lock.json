@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "skills": {
+    "github-research": {
+      "source": "lingzhi227/agent-research-skills",
+      "sourceType": "github",
+      "computedHash": "30e19e51c3cff8253d1e3451f61be3a9cb03b8470fdd70f17cb56856d73c0f57"
+    },
+    "pptx": {
+      "source": "tfriedel/claude-office-skills",
+      "sourceType": "github",
+      "computedHash": "e4bf9be4e051629460c024619e590a84831ce5bb42ee83adaf63960fb3ce89ec"
+    }
+  }
+}

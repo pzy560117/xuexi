@@ -1,0 +1,56 @@
+{
+  "name": "superpowers",
+  "version": "2.1.1",
+  "description": "Prompt2Repo 全自动流水线：从 prompt.md 到完整可交付产物，内嵌验收标准、Docker 生成、AI 自测",
+  "author": {
+    "name": "P2R Team",
+    "email": ""
+  },
+  "license": "MIT",
+  "keywords": [
+    "prompt2repo",
+    "planning",
+    "brainstorming",
+    "bdd",
+    "docker",
+    "delivery",
+    "self-review"
+  ],
+  "commands": [
+    "./skills/brainstorming/",
+    "./skills/writing-plans/",
+    "./skills/executing-plans/",
+    "./skills/prompt-parser/",
+    "./skills/prompt2repo/",
+    "./skills/writing-plans-p2r/",
+    "./skills/executing-plans-p2r/",
+    "./skills/self-review/",
+    "./skills/delivery-packager/",
+    "./skills/docker-generator/"
+  ],
+  "skills": [
+    "./skills/agent-team-driven-development/",
+    "./skills/behavior-driven-development/",
+    "./skills/build-like-iphone-team/",
+    "./skills/systematic-debugging/",
+    "./skills/docker-generator/",
+    "./skills/prompt-parser/",
+    "./skills/prompt2repo/",
+    "./skills/writing-plans-p2r/",
+    "./skills/executing-plans-p2r/",
+    "./skills/self-review/",
+    "./skills/delivery-packager/"
+  ],
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stop-hook.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

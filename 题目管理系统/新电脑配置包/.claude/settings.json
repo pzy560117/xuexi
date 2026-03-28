@@ -1,0 +1,37 @@
+{
+  "env": {
+    "ANTHROPIC_AUTH_TOKEN": "sk-cp-dU413QBmN0bp3mdJ75-OXdNfm8SsE0MZCx4J8OmEl1Dxov16ia7JGMU50Hby9MvksruGSwY1kbTksCQH2q-b8G20wLwRf9z6zZhCWr-VZkYhNyGsqHuEaYo",
+    "ANTHROPIC_BASE_URL": "https://api.minimaxi.com/anthropic",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "MiniMax-M2.7-highspeed",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "MiniMax-M2.7-highspeed",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "MiniMax-M2.7-highspeed",
+    "ANTHROPIC_MODEL": "MiniMax-M2.7-highspeed",
+    "API_TIMEOUT_MS": "600000",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
+  },
+  "includeCoAuthoredBy": false,
+  "permissions": {
+    "allow": [],
+    "deny": []
+  },
+  "model": "opus[1m]",
+  "enabledPlugins": {
+    "superpowers@frad-dotclaude": false,
+    "superpowers@xuexi-local": true
+  },
+  "extraKnownMarketplaces": {
+    "frad-dotclaude": {
+      "source": {
+        "source": "github",
+        "repo": "FradSer/dotclaude"
+      }
+    },
+    "xuexi-local": {
+      "source": {
+        "source": "directory",
+        "path": "E:\\2026\\xianyu\\xuexi\\题目管理系统"
+      }
+    }
+  },
+  "skipDangerousModePermissionPrompt": true
+}

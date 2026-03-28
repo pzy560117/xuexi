@@ -1,0 +1,264 @@
+---
+name: executing-plans-p2r
+description: "Prompt2Repo Phase 2: 按任务计划生成完整项目代码，BDD驱动+Docker生成+英文检查+工程质量内置检查，支持 Ralph-Loop"
+---
+
+# Executing Plans — Prompt2Repo Phase 2
+
+## 概述
+
+本 Skill 是 Prompt2Repo 流水线的核心执行阶段。按 Phase 1 生成的任务计划逐个执行，生成完整的项目代码。
+
+**THIS MUST BE YOUR FIRST ACTION. Do NOT resolve the plan path, do NOT read files, do NOT do anything else until you have started the Superpower Loop.**
+
+## 启动 Ralph-Loop
+
+1. 首先解析计划目录路径（默认 `docs/plans/`）
+2. 立即执行：
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/scripts/setup-superpower-loop.sh" \
+  "Execute the Prompt2Repo plan at <resolved-plan-path>. Follow the task index strictly. For each task: read the task file, implement changes, run verification, mark complete." \
+  --completion-promise "EXECUTION_COMPLETE" \
+  --max-iterations 100
+```
+
+## 执行规则
+
+### 每个任务的执行流程
+
+```
+1. 读取 task-NNN-*.md
+2. 检查前置依赖是否完成
+3. 测试先行（如果任务包含测试要求）：
+   a. 先写测试文件（放到 unit_tests/ 或 API_tests/ 对应目录）
+   b. 运行测试 → 预期失败（RED）
+   c. 写实现代码
+   d. 运行测试 → 预期通过（GREEN）
+4. 执行验证步骤
+5. 质量检查（见下方）
+6. 语言检查（见下方）
+7. 在 _index.md 中标记为 done
+8. 进入下一个任务
+```
+
+### 工程质量内置检查（每个任务完成后）
+
+**文件规模检查**：
+- 单个文件不超过 800 行 → 超过则拆分
+- 单个函数不超过 50 行 → 超过则重构
+
+**代码质量检查**：
+- ✅ 是否有适当的错误处理（try-catch/error middleware + 统一响应格式）
+- ✅ 是否使用结构化日志（禁止裸 console.log/print，使用日志框架）
+- ✅ 是否有输入校验（所有 API 参数 Body/Query/Path）
+- ✅ 是否有必要的注释（函数级注释，语言取决于 Prompt 语言）
+- ✅ 是否暴露敏感信息（token/密码/密钥不得出现在日志/代码/前端）
+- ✅ 是否有 hardcode（如有需标注为 TODO 或说明原因）
+- ✅ API 返回是否规范（列表接口分页、响应体结构清晰）
+- ✅ 是否删除了调试用的 print/console.log 语句
+- ✅ 是否删除了被注释掉的大段废弃代码
+
+**安全检查**：
+- ✅ 认证中间件是否应用到受保护路由
+- ✅ 对象级授权（不能仅凭 ID 访问他人资源，需校验资源归属）
+- ✅ 功能级授权
+- ✅ 管理/调试端点是否有保护
+- ✅ CORS 配置是否合理
+- ✅ SQL 是否使用参数化查询（禁止字符串拼接）
+- ✅ 密码是否加密存储（不得明文）
+- ✅ 前端不得明文存储密码
+
+**架构检查**：
+- ✅ 是否遵循计划中的目录结构
+- ✅ 模块职责是否清晰（不在路由文件中写业务逻辑）
+- ✅ 是否有冗余文件
+- ✅ 是否出现数千行的"上帝文件/组件"
+
+### 🔴 英文语言链路检查（英文 Prompt 场景）
+
+读取 `docs/designs/_meta.md`，如 `prompt_language: "en"`：
+
+**每个任务完成后必须检查所有新增/修改文件**：
+- ✅ 代码注释不含中文
+- ✅ 日志消息不含中文
+- ✅ UI 文案/按钮/标签不含中文
+- ✅ 错误提示不含中文
+- ✅ 变量名/函数名不含中文
+- ✅ 测试描述不含中文
+- ✅ README 内容不含中文
+
+**发现中文字符 → 立即替换为英文后继续**。这是最高红线，不可忽略。
+
+### README 自动生成
+
+在所有功能任务完成后生成 `README.md`：
+
+```markdown
+# {Project Name}
+
+## Overview
+{从 Prompt 提取的核心描述}
+
+## Technology Stack
+- Frontend: {tech}
+- Backend: {tech}
+- Database: {db}
+
+## Quick Start
+
+### Prerequisites
+- Docker (recommended)
+- {或：Node.js >= 18 / Python >= 3.10 / Java >= 17}
+
+### Using Docker (Recommended)
+```bash
+docker compose up
+```
+The application will be available at:
+- Frontend: http://localhost:{port}
+- Backend API: http://localhost:{api_port}
+
+### Manual Setup
+{具体安装/启动命令}
+
+### Database Initialization
+{数据库初始化说明（Docker 自动完成 / 手动脚本）}
+
+## Running Tests
+```bash
+# Linux/Mac
+./run_tests.sh
+
+# Windows
+run_tests.bat
+```
+
+## Project Structure
+```
+{实际生成的目录树}
+```
+
+## API Documentation
+| Method | Endpoint | Description |
+|:---|:---|:---|
+{主要 API 端点列表}
+
+## Features
+{已实现功能列表}
+
+## Test Accounts
+{如有测试账号，列出}
+```
+
+### 测试脚本生成
+
+生成 `run_tests.sh`：
+
+```bash
+#!/bin/bash
+set -e
+
+echo "======================================"
+echo "Running Unit Tests..."
+echo "======================================"
+cd unit_tests/
+{单元测试命令}
+cd ..
+
+echo ""
+echo "======================================"
+echo "Running API Tests..."
+echo "======================================"
+echo "Note: Ensure the application is running before executing API tests."
+cd API_tests/
+{API测试命令}
+cd ..
+
+echo ""
+echo "======================================"
+echo "Test Summary"
+echo "======================================"
+echo "All tests completed."
+```
+
+生成 `run_tests.bat`（Windows 版本）：
+
+```batch
+@echo off
+echo ======================================
+echo Running Unit Tests...
+echo ======================================
+cd unit_tests
+{单元测试命令}
+cd ..
+
+echo.
+echo ======================================
+echo Running API Tests...
+echo ======================================
+echo Note: Ensure the application is running before executing API tests.
+cd API_tests
+{API测试命令}
+cd ..
+
+echo.
+echo ======================================
+echo Test Summary
+echo ======================================
+echo All tests completed.
+```
+
+**测试脚本要求**：
+- 使用断言
+- API 测试真实调用接口
+- 终端打印：**功能名称 + 返回码 + message**
+- 覆盖全部接口
+- 有些接口测试需要另外接口的返回值（如先登录获取 token，再用 token 调用其他接口）
+
+### Docker 配置生成（如需要）
+
+当项目需要 Docker 时，执行 `docker-generator` Skill 的逻辑：
+- 生成 `Dockerfile`
+- 生成 `docker-compose.yml`（含数据库服务、healthcheck、端口暴露）
+- 生成 `.dockerignore`
+- 生成 `init-db/` 初始化脚本
+
+**全栈项目特殊处理**：
+- 前后端分离项目（存在 `frontend/` + `backend/` 目录）→ 使用三服务模板（frontend Nginx + backend API + db）
+- SSR 框架项目（Next.js/Nuxt.js）→ 使用单服务模板（app + db）
+- 前端 Dockerfile 采用多阶段构建：builder 阶段 `npm run build` → Nginx 阶段 serve 静态文件
+- 生成 `nginx.conf` 配置 API 反向代理到后端容器
+- 参见 `docker-generator` Skill 的"全栈项目多容器编排模板"章节
+
+### 数据库初始化脚本
+
+如项目使用数据库，生成初始化脚本（置于 `init-db/` 目录）：
+- 建表语句（使用 IF NOT EXISTS）
+- 必要的种子数据（测试账号等）
+- **不打包数据库文件本身**
+
+## Loop 状态管理
+
+每完成一个任务：
+1. 更新 `docs/plans/_index.md` 中对应任务状态为 `done`
+2. 如果所有任务完成，执行最终质量全检
+3. 输出 `EXECUTION_COMPLETE`
+
+每次 Loop 迭代开始时：
+1. 读取 `docs/plans/_index.md` 获取进度
+2. 找到第一个 `pending` 状态的任务
+3. 执行该任务
+
+## 完成条件
+
+当以下全部满足时，Phase 2 完成：
+- `docs/plans/_index.md` 中所有任务标记为 `done`
+- `README.md` 已生成，包含启动和测试说明
+- `run_tests.sh` / `run_tests.bat` 已生成
+- `unit_tests/` 和 `API_tests/` 目录已创建
+- 数据库初始化脚本已生成（如适用）
+- Docker 配置已生成（如适用）
+- 英文 Prompt 场景下全部产物无中文字符
+
+输出 `EXECUTION_COMPLETE` 标记完成。

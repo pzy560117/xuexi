@@ -56,7 +56,9 @@ FR-XXX → 任务计划（是否有执行任务？）
 BDD 场景 → 任务计划（是否有对应的测试任务？）
 ```
 
-### Step 3: 执行 6 项检测
+### Step 3: 执行 6 项检测（要求使用子代理）
+
+**强制要求**：利用 `code-reviewer` 子代理（必须先读取 `skills/code-reviewer/SKILL.md`）或分配多视角分析（Multi-Perspective Analysis）的分身验证角色（如 Consistency reviewer、Factual reviewer）来执行具体的扫描与检测，避免单一维度的遗漏。
 
 #### 3.1 覆盖缺口检测 (Coverage Gaps)
 

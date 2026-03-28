@@ -25,7 +25,11 @@ description: "Prompt2Repo Phase 2: 按任务计划生成完整项目代码，BDD
 
 ## 执行规则
 
-### 每个任务的执行流程
+### 每个任务的执行流程（要求使用子代理）
+
+**强制子代理协作机制**：
+- **`tdd-guide` (TDD 导师代理)**：强制在此阶段主导每个任务的 `Red-Green-Refactor` 测试先行驱动循环。执行前必须先读取 `skills/tdd-guide/SKILL.md`。
+- **`build-error-resolver` (构建错误修复代理)**：如在执行或验证期间遭遇编译失败/类型错误，必须在主 Loop 外派发给该专项代理快速修复，不污染主代码生成逻辑。修复前必须读取 `skills/build-error-resolver/SKILL.md`。
 
 ```
 1. 读取 task-NNN-*.md

@@ -17,7 +17,9 @@ description: "Prompt2Repo Phase 4: 交付物目录规范化、清理缓存文件
 
 ## 执行步骤
 
-### Step 1: 创建交付目录结构
+### Step 1: 创建交付目录结构（要求使用子代理）
+
+**强制要求**：拉起并利用 `doc-updater`（文档更新代理，需读取 `skills/doc-updater/SKILL.md`）扫描最终产出，负责合并文档、生成元数据、规整说明文档及标准化输出。
 
 ```
 TASK-{ID}/

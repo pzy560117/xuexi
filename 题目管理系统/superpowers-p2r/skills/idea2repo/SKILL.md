@@ -2,8 +2,22 @@
 name: idea2repo
 description: "Idea2Repo 一键入口: 从模糊的 idea 出发，自动经过头脑风暴(Brainstorming)、计划连贯编写与执行，直达完整交付包。适合没有完整 prompt.md 的场景。"
 ---
-
 # Idea2Repo — 从 Idea 到 Repo 的全自动流水线
+
+## 🔴 核心执行纪律 (CRITICAL RULES - READ BEFORE ACTING)
+
+1. **绝对拦截，禁止跨阶段越权**：
+   无论用户给出的 `<idea>` 有多详细，你都**绝对禁止**在 Phase 2 (Executing Plans) 被正式激活前，使用任何工具（如 `mkdir`, `Write`, `Bash` 等）创建具体的业务代码文件。所有的设想要先落地为设计文档。
+2. **主动管理阶段状态 (State Advancement Duty) ★ 绝对不可省略**：
+   Loop 脚本无法自动猜测进度！当你准备结束当前阶段（即：准备输出诸如 `BRAINSTORMING_COMPLETE` 的信号词）时，你**必须**先使用文件写入工具（Write/Replace）主动修改 `.claude/superpower-loop.local.md` 文件：
+   (1) 将当前 Phase 的 `status` 字段从 `in_progress` 改成 `done`。
+   (2) 将链条上下一个非跳过的 Phase 的 `status` 置为 `in_progress`。
+   (3) 更新属性 `current_phase` 为相应的索引。
+   **只有当这三步保存成功后，你才能继续执行最后一步（输出完成信号）！**
+3. **单步挂起原则 (Yield Control)**：
+   一次对话回合**只能执行当前一个 Phase 的任务**。当你完成当前阶段的内容并按上述规则更新了状态文件后，你必须且只能输出对应的完成信号，然后**强制立刻停止 (STOP)**，绝不允许在同一回合继续拉起下一个阶段的动作。
+4. **强制从 Phase 0 起步**：
+   任何通过 `idea2repo` 进来的任务，第一步只能是产出文档到 `docs/designs/`。哪怕需求再完美，也必须走这个输出流程来固化设计，禁止为了图快而跳过脑暴或计划阶段。
 
 ## 概述
 
@@ -19,14 +33,14 @@ description: "Idea2Repo 一键入口: 从模糊的 idea 出发，自动经过头
 
 ### 参数说明
 
-| 参数 | 必填 | 说明 |
-|:---|:---:|:---|
-| `<idea>` | ✅ | 你的初步想法或一句话需求 |
-| `--task-id` | ✅ | 题目 ID，用于交付包命名 |
-| `--max-iterations` | ❌ | Ralph-Loop 最大迭代次数（默认 100） |
-| `--skip-checklist` | ❌ | 跳过 Phase 3 领域检查清单 |
-| `--skip-review` | ❌ | 跳过 Phase 4 自测审查 |
-| `--skip-package` | ❌ | 跳过 Phase 5 交付打包 |
+| 参数                 | 必填 | 说明                                |
+| :------------------- | :--: | :---------------------------------- |
+| `<idea>`           |  ✅  | 你的初步想法或一句话需求            |
+| `--task-id`        |  ✅  | 题目 ID，用于交付包命名             |
+| `--max-iterations` |  ❌  | Ralph-Loop 最大迭代次数（默认 100） |
+| `--skip-checklist` |  ❌  | 跳过 Phase 3 领域检查清单           |
+| `--skip-review`    |  ❌  | 跳过 Phase 4 自测审查               |
+| `--skip-package`   |  ❌  | 跳过 Phase 5 交付打包               |
 
 ## 执行流程
 
@@ -174,6 +188,7 @@ phases:
 ## 迭代机制
 
 每次 Loop 迭代开始时：
+
 1. 读取状态文件
 2. 找到当前 `in_progress` 的 Phase
 3. 继续执行该 Phase（调用对应 Skill：brainstorming 或 writing-plans 或 executing-plans 等）
@@ -192,6 +207,7 @@ phases:
 当 `DELIVERY_COMPLETE` 输出时，整个 Idea2Repo 流程完成。
 
 最终产物：
+
 - `TASK-{ID}/` 目录，包含完整的可交付项目包
 - `docs/designs/` 和 `docs/plans/`
 - `.tmp/self-review-report.md` 自测报告（不打包）

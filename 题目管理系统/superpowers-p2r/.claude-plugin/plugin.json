@@ -41,7 +41,16 @@
     "./skills/writing-plans-p2r/",
     "./skills/executing-plans-p2r/",
     "./skills/self-review/",
-    "./skills/delivery-packager/"
+    "./skills/delivery-packager/",
+    "./skills/architect/",
+    "./skills/planner/",
+    "./skills/code-reviewer/",
+    "./skills/tdd-guide/",
+    "./skills/build-error-resolver/",
+    "./skills/security-reviewer/",
+    "./skills/refactor-cleaner/",
+    "./skills/e2e-runner/",
+    "./skills/doc-updater/"
   ],
   "hooks": {
     "Stop": [

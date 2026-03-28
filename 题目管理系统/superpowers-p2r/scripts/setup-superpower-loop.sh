@@ -169,6 +169,39 @@ fi
 # Create state file for stop hook (markdown with YAML frontmatter)
 mkdir -p "$(dirname "$STATE_FILE")"
 
+# Guard against accidentally overwriting an active multi-phase pipeline state.
+# This commonly happens when a phase skill starts a nested loop and clobbers
+# the parent `.claude/superpower-loop.local.md`, which breaks auto-continuation.
+if [[ -f "$STATE_FILE" ]]; then
+  EXISTING_CONTENT=$(awk 'NR==1{sub(/^\xef\xbb\xbf/,"")} {print}' "$STATE_FILE")
+  EXISTING_FRONTMATTER=$(printf '%s\n' "$EXISTING_CONTENT" | sed -n '/^---$/,/^---$/{ /^---$/d; p; }')
+  EXISTING_ACTIVE=$(echo "$EXISTING_FRONTMATTER" | grep '^active:' | sed 's/active: *//' || true)
+  EXISTING_HAS_PHASES=0
+  if echo "$EXISTING_FRONTMATTER" | grep -q '^phases:'; then
+    EXISTING_HAS_PHASES=1
+  fi
+
+  if [[ "$(basename "$STATE_FILE")" == "superpower-loop.local.md" ]] && [[ "$EXISTING_ACTIVE" == "true" ]] && [[ "$EXISTING_HAS_PHASES" -eq 1 ]]; then
+    echo "❌ Error: Refusing to overwrite active multi-phase loop state: $STATE_FILE" >&2
+    echo "" >&2
+    echo "   This file is owned by a parent pipeline (contains phases:)." >&2
+    echo "   Starting a nested loop here would break automatic phase continuation." >&2
+    echo "" >&2
+    echo "   Use an isolated state file instead, for example:" >&2
+    echo "     --state-file .claude/superpower-loop-executing-plans.local.md" >&2
+    exit 1
+  fi
+fi
+
+# Normalize session id:
+# Some runtimes expose a non-UUID CLAUDE_CODE_SESSION_ID (for example, prompt tags),
+# while stop-hook receives UUID session_id from hook payload.
+# If it's not a UUID, leave session_id empty so stop-hook can still match safely.
+SESSION_ID="${CLAUDE_CODE_SESSION_ID:-}"
+if [[ -n "$SESSION_ID" ]] && [[ ! "$SESSION_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+  SESSION_ID=""
+fi
+
 # Quote completion promise for YAML if it contains special chars or is not null
 if [[ -n "$COMPLETION_PROMISE" ]] && [[ "$COMPLETION_PROMISE" != "null" ]]; then
   COMPLETION_PROMISE_YAML="\"$COMPLETION_PROMISE\""
@@ -180,7 +213,7 @@ cat > "$STATE_FILE" <<EOF
 ---
 active: true
 iteration: 1
-session_id: ${CLAUDE_CODE_SESSION_ID:-}
+session_id: ${SESSION_ID}
 max_iterations: $MAX_ITERATIONS
 completion_promise: $COMPLETION_PROMISE_YAML
 started_at: "$(date -u +%Y-%m-%dT%H:%M:%SZ)"

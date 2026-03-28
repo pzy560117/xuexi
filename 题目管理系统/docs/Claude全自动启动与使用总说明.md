@@ -10,7 +10,7 @@
 
 **自动触发原理**：`~/.claude/CLAUDE.md` 配置了强制触发规则——识别到业务需求输入后，自动写入 `prompt.md` → 生成 TASK-ID → 执行 `/superpowers:prompt2repo`，无需任何外部脚本。
 
-## 二、5 阶段流水线
+## 二、6 阶段流水线
 
 | Phase | 名称 | 输出 |
 |:---:|:---|:---|
@@ -18,7 +18,8 @@
 | 1 | Writing Plans | BDD 规格 + 架构设计 + 任务拆分 |
 | 2 | Executing Plans (Ralph-Loop) | 逐任务测试先行 → 实现 → 验证 |
 | 3 | Self Review | 6 维度审查 + 安全审查 + 自动修复 |
-| 4 | Delivery Packager | `TASK-{ID}/` 标准交付包 |
+| 4 | Delivery Packager | 生成 `TASK-{ID}/` 标准交付包（输出 `PACKAGE_COMPLETE`） |
+| 4.5 | Delivery Checker | 自动验收交付包 + 生成 `delivery-check-report.md` + 输出最终 `DELIVERY_COMPLETE` |
 
 **Ralph-Loop 机制**：`stop-hook.sh` 拦截 Claude 退出 → 注入 Prompt 继续执行 → 直到输出 `<promise>DELIVERY_COMPLETE</promise>` 才终止。
 
@@ -49,7 +50,7 @@
     ├── .claude-plugin/plugin.json
     ├── hooks/stop-hook.sh
     ├── scripts/setup-superpower-loop.sh
-    └── skills/               # 15 个 skill 目录
+    └── skills/               # 16+ 个 skill 目录（含 delivery-checker）
 ```
 
 ### Step 4: 配置 Claude 全局文件

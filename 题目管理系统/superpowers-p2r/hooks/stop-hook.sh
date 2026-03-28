@@ -15,10 +15,14 @@ HOOK_SESSION=$(echo "$HOOK_INPUT" | jq -r '.session_id // ""')
 # Supports multiple concurrent loops (e.g. parallel tasks in executing-plans)
 # by scanning all .claude/superpower-loop*.local.md files and matching session_id.
 SUPERPOWER_STATE_FILE=""
+ALL_CANDIDATES=()
 
 for candidate in .claude/superpower-loop*.local.md; do
   [[ -f "$candidate" ]] || continue
-  CANDIDATE_FRONTMATTER=$(sed -n '/^---$/,/^---$/{ /^---$/d; p; }' "$candidate")
+  ALL_CANDIDATES+=("$candidate")
+  # Normalize UTF-8 BOM on first line before parsing frontmatter.
+  CANDIDATE_CONTENT=$(awk 'NR==1{sub(/^\xef\xbb\xbf/,"")} {print}' "$candidate")
+  CANDIDATE_FRONTMATTER=$(printf '%s\n' "$CANDIDATE_CONTENT" | sed -n '/^---$/,/^---$/{ /^---$/d; p; }')
   CANDIDATE_SESSION=$(echo "$CANDIDATE_FRONTMATTER" | grep '^session_id:' | sed 's/session_id: *//' || true)
   # Match explicit session_id, or fall through for legacy files without one
   if [[ -z "$CANDIDATE_SESSION" ]] || [[ "$CANDIDATE_SESSION" == "$HOOK_SESSION" ]]; then
@@ -28,12 +32,20 @@ for candidate in .claude/superpower-loop*.local.md; do
 done
 
 if [[ -z "$SUPERPOWER_STATE_FILE" ]]; then
-  # No active loop for this session - allow exit
-  exit 0
+  # Compatibility fallback:
+  # In some environments, setup writes a non-UUID session id while hook payload
+  # provides UUID session id. If there is exactly one active loop file, use it.
+  if [[ ${#ALL_CANDIDATES[@]} -eq 1 ]]; then
+    SUPERPOWER_STATE_FILE="${ALL_CANDIDATES[0]}"
+  else
+    # No active loop for this session - allow exit
+    exit 0
+  fi
 fi
 
 # Parse markdown frontmatter (YAML between ---) and extract values
-FRONTMATTER=$(sed -n '/^---$/,/^---$/{ /^---$/d; p; }' "$SUPERPOWER_STATE_FILE")
+STATE_CONTENT=$(awk 'NR==1{sub(/^\xef\xbb\xbf/,"")} {print}' "$SUPERPOWER_STATE_FILE")
+FRONTMATTER=$(printf '%s\n' "$STATE_CONTENT" | sed -n '/^---$/,/^---$/{ /^---$/d; p; }')
 ITERATION=$(echo "$FRONTMATTER" | grep '^iteration:' | sed 's/iteration: *//')
 MAX_ITERATIONS=$(echo "$FRONTMATTER" | grep '^max_iterations:' | sed 's/max_iterations: *//')
 # Extract completion_promise and strip surrounding quotes if present
@@ -47,7 +59,6 @@ if [[ ! "$ITERATION" =~ ^[0-9]+$ ]]; then
   echo "" >&2
   echo "   This usually means the state file was manually edited or corrupted." >&2
   echo "   Superpower loop is stopping. Run /superpower-loop again to start fresh." >&2
-  rm "$SUPERPOWER_STATE_FILE"
   exit 0
 fi
 
@@ -58,7 +69,6 @@ if [[ ! "$MAX_ITERATIONS" =~ ^[0-9]+$ ]]; then
   echo "" >&2
   echo "   This usually means the state file was manually edited or corrupted." >&2
   echo "   Superpower loop is stopping. Run /superpower-loop again to start fresh." >&2
-  rm "$SUPERPOWER_STATE_FILE"
   exit 0
 fi
 
@@ -74,7 +84,6 @@ TRANSCRIPT_PATH=$(echo "$HOOK_INPUT" | jq -r '.transcript_path')
 
 if [[ ! -f "$TRANSCRIPT_PATH" ]]; then
   # transcript_path may be a directory or missing in some Claude Code versions — not an error
-  rm "$SUPERPOWER_STATE_FILE"
   exit 0
 fi
 
@@ -85,7 +94,6 @@ if ! grep -q '"role":"assistant"' "$TRANSCRIPT_PATH"; then
   echo "   Transcript: $TRANSCRIPT_PATH" >&2
   echo "   This is unusual and may indicate a transcript format issue" >&2
   echo "   Superpower loop is stopping." >&2
-  rm "$SUPERPOWER_STATE_FILE"
   exit 0
 fi
 
@@ -101,7 +109,6 @@ LAST_LINES=$(grep '"role":"assistant"' "$TRANSCRIPT_PATH" | tail -n 100)
 if [[ -z "$LAST_LINES" ]]; then
   echo "Warning: Superpower loop: Failed to extract assistant messages" >&2
   echo "   Superpower loop is stopping." >&2
-  rm "$SUPERPOWER_STATE_FILE"
   exit 0
 fi
 
@@ -123,7 +130,6 @@ if [[ $JQ_EXIT -ne 0 ]]; then
   echo "   Error: $LAST_OUTPUT" >&2
   echo "   This may indicate a transcript format issue." >&2
   echo "   Superpower loop is stopping." >&2
-  rm "$SUPERPOWER_STATE_FILE"
   exit 0
 fi
 
@@ -149,7 +155,7 @@ NEXT_ITERATION=$((ITERATION + 1))
 # Extract prompt (everything after the closing ---)
 # Skip first --- line, skip until second --- line, then print everything after
 # Use i>=2 instead of i==2 to handle --- in prompt content
-PROMPT_TEXT=$(awk '/^---$/{i++; next} i>=2' "$SUPERPOWER_STATE_FILE")
+PROMPT_TEXT=$(printf '%s\n' "$STATE_CONTENT" | awk '/^---$/{i++; next} i>=2')
 
 if [[ -z "$PROMPT_TEXT" ]]; then
   echo "Warning: Superpower loop: State file corrupted or incomplete" >&2
@@ -161,7 +167,6 @@ if [[ -z "$PROMPT_TEXT" ]]; then
   echo "     - File was corrupted during writing" >&2
   echo "" >&2
   echo "   Superpower loop is stopping. Run /superpower-loop again to start fresh." >&2
-  rm "$SUPERPOWER_STATE_FILE"
   exit 0
 fi
 

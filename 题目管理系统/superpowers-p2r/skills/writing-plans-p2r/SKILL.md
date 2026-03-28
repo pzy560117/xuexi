@@ -32,9 +32,16 @@ description: "Prompt2Repo Phase 1: 基于需求分析生成 BDD 行为规格+架
 
 输出到 `docs/designs/bdd-specs.md`。
 
-### Step 3: 生成架构设计（要求使用子代理）
+### Step 3: 生成架构设计（优先并发子代理，失败自动降级）
 
-**强制要求**：拉起并利用项目内置的 `architect` 子代理（System design specialist）来专门负责产出符合最佳实践的系统架构、数据流和组件划分。必须先使用 `view_file` 工具读取 `skills/architect/SKILL.md` 加载该代理的底层规则。
+优先采用 **并行任务执行 (Parallel Task Execution)** 拉起架构子代理。
+- 可用 agent 类型以当前运行环境为准，推荐优先级：`Plan` → `Explore` → `general-purpose`。
+- 先读取 `skills/architect/SKILL.md` 作为架构规则输入。
+- 由子代理负责系统架构、数据流和组件划分。
+
+兼容性要求（必须遵守）：
+- **禁止硬编码不存在的 agent type**（例如 `superpowers:architect`）。
+- 若当前环境不支持上述子代理或创建失败，**必须自动降级为主线程直接完成架构设计**，不得中断 Phase。
 
 根据项目类型生成 `docs/designs/architecture.md`：
 
@@ -119,9 +126,16 @@ project_root/
 - 有前置依赖的接口测试需先调用依赖接口（如先登录获取 token）
 ```
 
-### Step 5: 生成任务计划（要求使用子代理）
+### Step 5: 生成任务计划（优先并发子代理，失败自动降级）
 
-**强制要求**：拉起并利用项目内置的 `planner` 子代理（Implementation planning specialist），接收前序的架构设计与 Spec 结果，将工作细化为带有明确依赖关系的 Tasks 执行队列。必须先使用 `view_file` 工具读取 `skills/planner/SKILL.md` 面向任务拆分的规则。
+优先采用 **并行任务执行 (Parallel Task Execution)** 拉起任务规划子代理。
+- 可用 agent 类型以当前运行环境为准，推荐优先级：`Plan` → `Explore` → `general-purpose`。
+- 先读取 `skills/planner/SKILL.md` 作为任务拆分规则输入。
+- 由子代理基于架构设计与规格结果细化任务依赖队列。
+
+兼容性要求（必须遵守）：
+- **禁止硬编码不存在的 agent type**（例如 `superpowers:planner`）。
+- 若当前环境不支持上述子代理或创建失败，**必须自动降级为主线程直接完成任务拆分**，不得中断 Phase。
 
 将 BDD 场景拆分为 2-5 分钟可执行的小任务，输出到 `docs/plans/` 目录。
 

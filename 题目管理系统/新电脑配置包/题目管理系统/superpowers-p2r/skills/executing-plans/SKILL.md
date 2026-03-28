@@ -10,18 +10,23 @@ allowed-tools: ["TaskCreate", "TaskUpdate", "TaskList", "TaskGet", "Read", "Glob
 
 Execute written implementation plans efficiently using Superpower Loop for continuous iteration through all phases.
 
-## CRITICAL: First Action - Start Superpower Loop NOW
+## CRITICAL: Loop Mode Detection First
 
-**THIS MUST BE YOUR FIRST ACTION. Do NOT resolve the plan path, do NOT read files, do NOT do anything else until you have started the Superpower Loop.**
+Before any other action, determine whether this skill is running inside an existing multi-phase loop.
 
-1. Resolve the plan path from `$ARGUMENTS` (if provided) or by searching `docs/plans/`
-2. Immediately run:
+1. If `.claude/superpower-loop.local.md` exists and contains `phases:`:
+   - Treat this run as an in-pipeline phase.
+   - **Do NOT start another loop** with `setup-superpower-loop.sh`.
+   - Continue directly with plan execution.
+2. If no active multi-phase loop exists (standalone invocation):
+   - Resolve the plan path from `$ARGUMENTS` (if provided) or by searching `docs/plans/`.
+   - Start a dedicated loop using an isolated state file:
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/scripts/setup-superpower-loop.sh" "Execute the plan at <resolved-plan-path>. Continue progressing through the superpowers:executing-plans skill phases: Phase 1 (Plan Review) → Phase 2 (Task Creation) → Phase 3 (Batch Execution) → Phase 4 (Verification) → Phase 5 (Git Commit) → Phase 6 (Completion)." --completion-promise "EXECUTION_COMPLETE" --max-iterations 100
+"${CLAUDE_PLUGIN_ROOT}/scripts/setup-superpower-loop.sh" "Execute the plan at <resolved-plan-path>. Continue progressing through the superpowers:executing-plans skill phases: Phase 1 (Plan Review) → Phase 2 (Task Creation) → Phase 3 (Batch Execution) → Phase 4 (Verification) → Phase 5 (Git Commit) → Phase 6 (Completion)." --completion-promise "EXECUTION_COMPLETE" --max-iterations 100 --state-file ".claude/superpower-loop-executing-plans.local.md"
 ```
-3. Only after the loop is running, proceed to verify the plan folder and continue with execution
+3. Only after mode detection/loop startup is complete, proceed to verify the plan folder and continue execution.
 
-**The loop enables self-referential iteration throughout the execution process.**
+**Rationale**: Starting a nested loop on `.claude/superpower-loop.local.md` will overwrite the parent phase state and break automatic continuation.
 
 ## Superpower Loop Integration
 
@@ -39,7 +44,7 @@ Do NOT output the promise until ALL conditions are genuinely TRUE.
 
 ## Initialization
 
-(The Superpower Loop was already started in the critical first action above - do NOT start it again)
+(Loop mode has already been determined above - do NOT start another loop here.)
 
 1. **Resolve Plan Path** (must complete to build the prompt for the loop above):
    - If `$ARGUMENTS` provides a path (e.g., `docs/plans/YYYY-MM-DD-topic-plan/`), use it as the plan source.

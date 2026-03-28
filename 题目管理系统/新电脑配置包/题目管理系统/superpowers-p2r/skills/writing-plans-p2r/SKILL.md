@@ -32,7 +32,12 @@ description: "Prompt2Repo Phase 1: 基于需求分析生成 BDD 行为规格+架
 
 输出到 `docs/designs/bdd-specs.md`。
 
-### Step 3: 生成架构设计
+### Step 3: 生成架构设计（要求强制使用并发子代理）
+
+**绝对强制执行！**：必须采用 **并行任务执行 (Parallel Task Execution)** 拉起专属的 `architect` 子代理（System design specialist）。
+- 动作 1：先使用 `view_file` 工具读取 `skills/architect/SKILL.md` 加载该代理的底层规则。
+- 动作 2：由该子代理独立作为架构师，专门负责产出符合最佳实践的系统架构、数据流和组件划分。
+**禁止单线程自我扮演，必须触发工具层面的多智能体并行调用逻辑！**
 
 根据项目类型生成 `docs/designs/architecture.md`：
 
@@ -117,7 +122,12 @@ project_root/
 - 有前置依赖的接口测试需先调用依赖接口（如先登录获取 token）
 ```
 
-### Step 5: 生成任务计划
+### Step 5: 生成任务计划（要求强制使用并发子代理）
+
+**绝对强制执行！**：必须采用 **并行任务执行 (Parallel Task Execution)** 拉起专属的 `planner` 子代理（Implementation planning specialist）。
+- 动作 1：先使用 `view_file` 工具读取 `skills/planner/SKILL.md` 面向任务拆分的规则。
+- 动作 2：由该子代理独立接收前序的架构设计与 Spec 结果，将工作细化为带有明确依赖关系的 Tasks 执行队列。
+**禁止单线程自我扮演，必须触发工具层面的多智能体并行调用逻辑！**
 
 将 BDD 场景拆分为 2-5 分钟可执行的小任务，输出到 `docs/plans/` 目录。
 

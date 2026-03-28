@@ -9,27 +9,36 @@ description: "Prompt2Repo Phase 2: 按任务计划生成完整项目代码，BDD
 
 本 Skill 是 Prompt2Repo 流水线的核心执行阶段。按 Phase 1 生成的任务计划逐个执行，生成完整的项目代码。
 
-**THIS MUST BE YOUR FIRST ACTION. Do NOT resolve the plan path, do NOT read files, do NOT do anything else until you have started the Superpower Loop.**
+## Ralph-Loop 集成模式（关键）
 
-## 启动 Ralph-Loop
+本 Skill 支持两种运行模式，**必须先判断再执行**：
 
-1. 首先解析计划目录路径（默认 `docs/plans/`）
-2. 立即执行：
+1. **Prompt2Repo 主流程内调用（默认）**  
+   当 `.claude/superpower-loop.local.md` 已存在并包含 `phases:` 时，说明主流程 Loop 已在运行。  
+   **禁止再次调用** `setup-superpower-loop.sh`，否则会覆盖主状态文件并导致后续 Phase 无法自动推进。
+
+2. **独立调用 `/superpowers:executing-plans-p2r`**  
+   仅在没有主流程 Loop 时，才启动专用 Loop，且必须使用独立状态文件避免冲突：
 
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/scripts/setup-superpower-loop.sh" \
   "Execute the Prompt2Repo plan at <resolved-plan-path>. Follow the task index strictly. For each task: read the task file, implement changes, run verification, mark complete." \
   --completion-promise "EXECUTION_COMPLETE" \
-  --max-iterations 100
+  --max-iterations 100 \
+  --state-file ".claude/superpower-loop-executing-plans.local.md"
 ```
 
 ## 执行规则
 
-### 每个任务的执行流程（要求使用子代理）
+### 每个任务的执行流程（优先并发子代理，失败自动降级）
 
-**强制子代理协作机制**：
-- **`tdd-guide` (TDD 导师代理)**：强制在此阶段主导每个任务的 `Red-Green-Refactor` 测试先行驱动循环。执行前必须先读取 `skills/tdd-guide/SKILL.md`。
-- **`build-error-resolver` (构建错误修复代理)**：如在执行或验证期间遭遇编译失败/类型错误，必须在主 Loop 外派发给该专项代理快速修复，不污染主代码生成逻辑。修复前必须读取 `skills/build-error-resolver/SKILL.md`。
+优先采用 **并行任务执行 (Parallel Task Execution)** 拉起专业子代理协作：
+- **TDD 导师职责**：先读取 `skills/tdd-guide/SKILL.md`，主导 `Red-Green-Refactor` 循环。
+- **构建修复职责**：先读取 `skills/build-error-resolver/SKILL.md`，在编译/类型错误出现时快速修复。
+
+兼容性要求（必须遵守）：
+- agent 类型必须使用当前环境可用列表（如 `Plan` / `Explore` / `general-purpose`），**禁止硬编码不存在的类型**。
+- 若并行子代理不可用或创建失败，**必须自动降级为主线程继续执行上述职责**，不得中断 Phase。
 
 ```
 1. 读取 task-NNN-*.md

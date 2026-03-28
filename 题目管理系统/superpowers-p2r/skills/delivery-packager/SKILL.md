@@ -7,7 +7,7 @@ description: "Prompt2Repo Phase 4: 交付物目录规范化、清理缓存文件
 
 ## 概述
 
-本 Skill 是 Prompt2Repo 流水线的最终阶段。将生成的项目按照交付规范打包为标准目录结构。
+本 Skill 是 Prompt2Repo 流水线的打包阶段（由后续 Delivery Checker 执行最终自动验收）。将生成的项目按照交付规范打包为标准目录结构。
 
 **前提条件**: Phase 3 自测审查通过（`.tmp/self-review-report.md` 存在且无阻塞问题）。
 
@@ -195,4 +195,4 @@ python validate_package.py TASK-{ID}/ --repair
 - 所有排除项已清理
 - 最终检查清单全部通过
 
-输出 `DELIVERY_COMPLETE` 标记完成。
+输出 `PACKAGE_COMPLETE` 标记完成。

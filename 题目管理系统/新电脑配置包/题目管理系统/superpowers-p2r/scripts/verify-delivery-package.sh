@@ -126,6 +126,69 @@ check_repo_core_files() {
   fi
 }
 
+# Enforce test-gate artifacts and hardened test execution scripts.
+check_test_gate_artifacts() {
+  local repo_dir="$PACKAGE_DIR/repo"
+  local docs_dir="$PACKAGE_DIR/docs"
+  local min_unit_files="${MIN_UNIT_TEST_FILES:-3}"
+  local min_api_files="${MIN_API_TEST_FILES:-3}"
+
+  if [ ! -d "$repo_dir/unit_tests" ]; then
+    fail_check "Missing test directory: repo/unit_tests"
+  else
+    pass_check "repo/unit_tests exists"
+  fi
+
+  if [ ! -d "$repo_dir/API_tests" ]; then
+    fail_check "Missing test directory: repo/API_tests"
+  else
+    pass_check "repo/API_tests exists"
+  fi
+
+  local unit_count=0
+  local api_count=0
+  unit_count=$(find "$repo_dir/unit_tests" -type f \( -name 'test_*.py' -o -name '*.test.js' -o -name '*.test.ts' -o -name '*.spec.js' -o -name '*.spec.ts' \) 2>/dev/null | wc -l | tr -d ' ')
+  api_count=$(find "$repo_dir/API_tests" -type f \( -name 'test_*.py' -o -name '*.test.js' -o -name '*.test.ts' -o -name '*.spec.js' -o -name '*.spec.ts' \) 2>/dev/null | wc -l | tr -d ' ')
+
+  if [ "$unit_count" -lt "$min_unit_files" ]; then
+    fail_check "Unit test files too few: $unit_count (required >= $min_unit_files)"
+  else
+    pass_check "Unit test file count is sufficient: $unit_count"
+  fi
+
+  if [ "$api_count" -lt "$min_api_files" ]; then
+    fail_check "API test files too few: $api_count (required >= $min_api_files)"
+  else
+    pass_check "API test file count is sufficient: $api_count"
+  fi
+
+  if [ -f "$repo_dir/run_tests.sh" ]; then
+    if grep -Eq '\|\|\s*echo|may have failed - this is expected' "$repo_dir/run_tests.sh"; then
+      fail_check "run_tests.sh is not fail-fast (contains failure-swallow pattern)"
+    else
+      pass_check "run_tests.sh fail-fast check passed"
+    fi
+  fi
+
+  if [ -f "$repo_dir/run_tests.bat" ]; then
+    if grep -Ei '\|\|\s*echo|may have failed - this is expected' "$repo_dir/run_tests.bat" >/dev/null 2>&1; then
+      fail_check "run_tests.bat is not fail-fast (contains failure-swallow pattern)"
+    else
+      pass_check "run_tests.bat fail-fast check passed"
+    fi
+  fi
+
+  if [ ! -f "$docs_dir/test-gate-report.md" ]; then
+    fail_check "Missing docs/test-gate-report.md (strict testing evidence)"
+  else
+    if grep -Eq 'FAIL=0|FAIL: 0|FAIL\): 0|FAIL\] 0' "$docs_dir/test-gate-report.md"; then
+      pass_check "test-gate-report indicates zero FAIL"
+    else
+      warn_check "test-gate-report present but FAIL=0 pattern not found; review manually"
+    fi
+  fi
+}
+
 # Ensure heavy artifacts and cache files are not shipped.
 check_forbidden_artifacts() {
   local repo_dir="$PACKAGE_DIR/repo"
@@ -169,6 +232,11 @@ check_forbidden_artifacts() {
 # Check Chinese character leakage for English prompts.
 check_language_cleanliness() {
   local repo_dir="$PACKAGE_DIR/repo"
+  if [ ! -d "$repo_dir" ]; then
+    fail_check "repo directory is missing; skipped language cleanliness scan"
+    ZH_HITS=""
+    return
+  fi
   if command -v rg >/dev/null 2>&1; then
     if rg -n --no-heading --pcre2 "[\x{4e00}-\x{9fff}]" "$repo_dir" >/tmp/delivery-check-zh.txt 2>/dev/null; then
       fail_check "Chinese characters found in repo/ (see report appendix)"
@@ -231,6 +299,10 @@ check_metadata_fields() {
 # Validate docker compose file syntax and common warnings.
 check_docker_compose() {
   local repo_dir="$PACKAGE_DIR/repo"
+  if [ ! -d "$repo_dir" ]; then
+    fail_check "repo directory is missing; skipped docker compose validation"
+    return
+  fi
   if ! command -v docker >/dev/null 2>&1; then
     warn_check "docker not available; skipped docker compose validation"
     return
@@ -256,6 +328,11 @@ check_docker_compose() {
 # Run lightweight placeholder secret checks to catch common mistakes.
 check_placeholder_secrets() {
   local repo_dir="$PACKAGE_DIR/repo"
+  if [ ! -d "$repo_dir" ]; then
+    fail_check "repo directory is missing; skipped placeholder secret scan"
+    SECRET_HITS=""
+    return
+  fi
   if command -v rg >/dev/null 2>&1; then
     local pattern='(your-super-secret-key-change-in-production|POSTGRES_PASSWORD:\s*postgres)'
     if rg -n --no-heading --pcre2 "$pattern" "$repo_dir" >/tmp/delivery-check-secret.txt 2>/dev/null; then
@@ -341,6 +418,7 @@ main() {
 
   check_required_structure
   check_repo_core_files
+  check_test_gate_artifacts
   check_forbidden_artifacts
   check_language_cleanliness
   check_metadata_fields

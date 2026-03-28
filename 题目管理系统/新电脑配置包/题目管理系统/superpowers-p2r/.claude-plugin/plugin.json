@@ -1,6 +1,6 @@
 {
   "name": "superpowers",
-  "version": "2.1.1",
+  "version": "2.2.0",
   "description": "Prompt2Repo 全自动流水线：从 prompt.md 到完整可交付产物，内嵌验收标准、Docker 生成、AI 自测",
   "author": {
     "name": "P2R Team",
@@ -29,6 +29,7 @@
     "./skills/consistency-gate/",
     "./skills/domain-checklist/",
     "./skills/self-review/",
+    "./skills/test-gate/",
     "./skills/delivery-packager/",
     "./skills/delivery-checker/",
     "./skills/docker-generator/"
@@ -48,6 +49,7 @@
     "./skills/consistency-gate/",
     "./skills/domain-checklist/",
     "./skills/self-review/",
+    "./skills/test-gate/",
     "./skills/delivery-packager/",
     "./skills/delivery-checker/",
     "./skills/architect/",

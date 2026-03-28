@@ -29,7 +29,24 @@ TASK-{ID}/
 
 如果未传 `--task-id`，自动选择当前工作区最新的 `TASK-*` 目录。
 
-### Step 2: 运行自动验收脚本
+### Step 2: 运行严格测试门禁（先测后验）
+
+先在交付包内 `repo/` 执行：
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/scripts/verify-test-gate.sh" \
+  --repo-dir TASK-{ID}/repo \
+  --report-file TASK-{ID}/docs/test-gate-report.md \
+  --min-unit-test-files 3 \
+  --min-api-test-files 3 \
+  --min-unit-coverage 70 \
+  --run-api-tests auto \
+  --strict true
+```
+
+若测试门禁失败，先修复后再继续后续验收。
+
+### Step 3: 运行自动验收脚本
 
 执行：
 
@@ -41,7 +58,7 @@ TASK-{ID}/
 - `PASS/WARN/FAIL` 统计
 - `TASK-{ID}/delivery-check-report.md`
 
-### Step 3: 处理阻塞项并复验
+### Step 4: 处理阻塞项并复验
 
 若脚本返回失败（`FAIL > 0`）：
 
@@ -49,7 +66,7 @@ TASK-{ID}/
 2. 重新执行 Step 2 复验。
 3. 最多复验 3 轮；若仍失败，将阻塞项写入 `questions.md` 并明确给出修复建议。
 
-### Step 4: 输出结论
+### Step 5: 输出结论
 
 在回复中给出：
 - 总检查结果（PASS/WARN/FAIL）

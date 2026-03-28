@@ -18,6 +18,8 @@ description: "Idea2Repo 一键入口: 从模糊的 idea 出发，自动经过头
    一次对话回合**只能执行当前一个 Phase 的任务**。当你完成当前阶段的内容并按上述规则更新了状态文件后，你必须且只能输出对应的完成信号，然后**强制立刻停止 (STOP)**，绝不允许在同一回合继续拉起下一个阶段的动作。
 4. **强制从 Phase 0 起步**：
    任何通过 `idea2repo` 进来的任务，第一步只能是产出文档到 `docs/designs/`。哪怕需求再完美，也必须走这个输出流程来固化设计，禁止为了图快而跳过脑暴或计划阶段。
+5. **严格 Skill 对齐 (Skill Lock)**：
+   每个 Phase 开始时必须先调用对应 skill。若当前环境无法通过 Skill 工具加载，必须立即退化为读取本地 `superpowers-p2r/skills/<phase>/SKILL.md` 并严格按该文件执行，禁止替换为自定义流程。
 
 ## 概述
 
@@ -40,6 +42,7 @@ description: "Idea2Repo 一键入口: 从模糊的 idea 出发，自动经过头
 | `--max-iterations` |  ❌  | Ralph-Loop 最大迭代次数（默认 100） |
 | `--skip-checklist` |  ❌  | 跳过 Phase 3 领域检查清单           |
 | `--skip-review`    |  ❌  | 跳过 Phase 4 自测审查               |
+| `--skip-test-gate` |  ❌  | 跳过 Phase 4.5 严格测试门禁         |
 | `--skip-package`   |  ❌  | 跳过 Phase 5 交付打包               |
 | `--skip-delivery-check` |  ❌  | 跳过 Phase 6 自动交付验收       |
 
@@ -74,6 +77,10 @@ description: "Idea2Repo 一键入口: 从模糊的 idea 出发，自动经过头
 │  Phase 4: Self Review (代码自审)                          │
 │  ├─ 自动审查代码质量并修复                                 │
 │  ✓ SELF_REVIEW_COMPLETE                                  │
+│                                                          │
+│  Phase 4.5: Test Gate ★ 质量门禁 (可选)                   │
+│  ├─ 严格测试门禁（覆盖率+API集成+fail-fast）              │
+│  ✓ TEST_GATE_COMPLETE                                    │
 │                                                          │
 │  Phase 5: Delivery Packager (打包交付)                    │
 │  ├─ 创建交付包并验证                                      │
@@ -128,7 +135,15 @@ description: "Idea2Repo 一键入口: 从模糊的 idea 出发，自动经过头
 等待 SELF_REVIEW_COMPLETE 信号。
 ```
 
-### 6. Phase 5（可跳过）
+### 6. Phase 4.5（可跳过）★ 质量门禁
+
+```
+如未指定 --skip-test-gate：
+执行 test-gate skill，运行严格测试门禁并生成报告。
+等待 TEST_GATE_COMPLETE 信号。
+```
+
+### 7. Phase 5（可跳过）
 
 ```
 如未指定 --skip-package：
@@ -136,7 +151,7 @@ description: "Idea2Repo 一键入口: 从模糊的 idea 出发，自动经过头
 等待 PACKAGE_COMPLETE 信号。
 ```
 
-### 7. Phase 6（可跳过）★ 质量门禁
+### 8. Phase 6（可跳过）★ 质量门禁
 
 ```
 如未指定 --skip-delivery-check：
@@ -190,6 +205,11 @@ phases:
     completion_promise: "SELF_REVIEW_COMPLETE"
     skippable: true
     skip_flag: "--skip-review"
+  - name: "test-gate"
+    status: "pending"
+    completion_promise: "TEST_GATE_COMPLETE"
+    skippable: true
+    skip_flag: "--skip-test-gate"
   - name: "delivery-packager"
     status: "pending"
     completion_promise: "PACKAGE_COMPLETE"

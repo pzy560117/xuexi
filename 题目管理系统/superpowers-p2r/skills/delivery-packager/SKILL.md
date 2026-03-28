@@ -9,7 +9,9 @@ description: "Prompt2Repo Phase 4: 交付物目录规范化、清理缓存文件
 
 本 Skill 是 Prompt2Repo 流水线的打包阶段（由后续 Delivery Checker 执行最终自动验收）。将生成的项目按照交付规范打包为标准目录结构。
 
-**前提条件**: Phase 3 自测审查通过（`.tmp/self-review-report.md` 存在且无阻塞问题）。
+**前提条件**:
+- Phase 3 自测审查通过（`.tmp/self-review-report.md` 存在且无阻塞问题）
+- Phase 3.5 严格测试门禁通过（`.tmp/test-gate-report.md` 存在且无 FAIL）
 
 ## 输入参数
 
@@ -100,6 +102,7 @@ TASK-{ID}/
 - `architecture.md` → `docs/design.md`（合并）
 - `requirement-analysis.md` → `docs/design.md`（合并）
 - 如有 API 规格 → `docs/api-spec.md`
+- 复制 `.tmp/test-gate-report.md` → `docs/test-gate-report.md`（若缺失视为阻塞项）
 
 ### Step 5: 复制 prompt.md
 

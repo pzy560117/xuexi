@@ -15,10 +15,14 @@ HOOK_SESSION=$(echo "$HOOK_INPUT" | jq -r '.session_id // ""')
 # Supports multiple concurrent loops (e.g. parallel tasks in executing-plans)
 # by scanning all .claude/superpower-loop*.local.md files and matching session_id.
 SUPERPOWER_STATE_FILE=""
+ALL_CANDIDATES=()
 
 for candidate in .claude/superpower-loop*.local.md; do
   [[ -f "$candidate" ]] || continue
-  CANDIDATE_FRONTMATTER=$(sed -n '/^---$/,/^---$/{ /^---$/d; p; }' "$candidate")
+  ALL_CANDIDATES+=("$candidate")
+  # Normalize UTF-8 BOM on first line before parsing frontmatter.
+  CANDIDATE_CONTENT=$(awk 'NR==1{sub(/^\xef\xbb\xbf/,"")} {print}' "$candidate")
+  CANDIDATE_FRONTMATTER=$(printf '%s\n' "$CANDIDATE_CONTENT" | sed -n '/^---$/,/^---$/{ /^---$/d; p; }')
   CANDIDATE_SESSION=$(echo "$CANDIDATE_FRONTMATTER" | grep '^session_id:' | sed 's/session_id: *//' || true)
   # Match explicit session_id, or fall through for legacy files without one
   if [[ -z "$CANDIDATE_SESSION" ]] || [[ "$CANDIDATE_SESSION" == "$HOOK_SESSION" ]]; then
@@ -28,12 +32,20 @@ for candidate in .claude/superpower-loop*.local.md; do
 done
 
 if [[ -z "$SUPERPOWER_STATE_FILE" ]]; then
-  # No active loop for this session - allow exit
-  exit 0
+  # Compatibility fallback:
+  # In some environments, setup writes a non-UUID session id while hook payload
+  # provides UUID session id. If there is exactly one active loop file, use it.
+  if [[ ${#ALL_CANDIDATES[@]} -eq 1 ]]; then
+    SUPERPOWER_STATE_FILE="${ALL_CANDIDATES[0]}"
+  else
+    # No active loop for this session - allow exit
+    exit 0
+  fi
 fi
 
 # Parse markdown frontmatter (YAML between ---) and extract values
-FRONTMATTER=$(sed -n '/^---$/,/^---$/{ /^---$/d; p; }' "$SUPERPOWER_STATE_FILE")
+STATE_CONTENT=$(awk 'NR==1{sub(/^\xef\xbb\xbf/,"")} {print}' "$SUPERPOWER_STATE_FILE")
+FRONTMATTER=$(printf '%s\n' "$STATE_CONTENT" | sed -n '/^---$/,/^---$/{ /^---$/d; p; }')
 ITERATION=$(echo "$FRONTMATTER" | grep '^iteration:' | sed 's/iteration: *//')
 MAX_ITERATIONS=$(echo "$FRONTMATTER" | grep '^max_iterations:' | sed 's/max_iterations: *//')
 # Extract completion_promise and strip surrounding quotes if present
@@ -47,7 +59,6 @@ if [[ ! "$ITERATION" =~ ^[0-9]+$ ]]; then
   echo "" >&2
   echo "   This usually means the state file was manually edited or corrupted." >&2
   echo "   Superpower loop is stopping. Run /superpower-loop again to start fresh." >&2
-  rm "$SUPERPOWER_STATE_FILE"
   exit 0
 fi
 
@@ -58,7 +69,6 @@ if [[ ! "$MAX_ITERATIONS" =~ ^[0-9]+$ ]]; then
   echo "" >&2
   echo "   This usually means the state file was manually edited or corrupted." >&2
   echo "   Superpower loop is stopping. Run /superpower-loop again to start fresh." >&2
-  rm "$SUPERPOWER_STATE_FILE"
   exit 0
 fi
 
@@ -69,62 +79,31 @@ if [[ $MAX_ITERATIONS -gt 0 ]] && [[ $ITERATION -ge $MAX_ITERATIONS ]]; then
   exit 0
 fi
 
-# Get transcript path from hook input
-TRANSCRIPT_PATH=$(echo "$HOOK_INPUT" | jq -r '.transcript_path')
+# Prefer hook-native last_assistant_message (newer Claude Code field).
+# Fallback to transcript parsing for older versions.
+LAST_OUTPUT=$(echo "$HOOK_INPUT" | jq -r '.last_assistant_message // ""')
 
-if [[ ! -f "$TRANSCRIPT_PATH" ]]; then
-  # transcript_path may be a directory or missing in some Claude Code versions — not an error
-  rm "$SUPERPOWER_STATE_FILE"
-  exit 0
-fi
+if [[ -z "$LAST_OUTPUT" ]]; then
+  TRANSCRIPT_PATH=$(echo "$HOOK_INPUT" | jq -r '.transcript_path // ""')
 
-# Read last assistant message from transcript (JSONL format - one JSON per line)
-# First check if there are any assistant messages
-if ! grep -q '"role":"assistant"' "$TRANSCRIPT_PATH"; then
-  echo "Warning: Superpower loop: No assistant messages found in transcript" >&2
-  echo "   Transcript: $TRANSCRIPT_PATH" >&2
-  echo "   This is unusual and may indicate a transcript format issue" >&2
-  echo "   Superpower loop is stopping." >&2
-  rm "$SUPERPOWER_STATE_FILE"
-  exit 0
-fi
+  if [[ -n "$TRANSCRIPT_PATH" ]] && [[ -f "$TRANSCRIPT_PATH" ]]; then
+    # Read last assistant message from transcript (JSONL format - one JSON per line)
+    LAST_LINES=$(grep '"role":"assistant"' "$TRANSCRIPT_PATH" | tail -n 100 || true)
 
-# Extract the most recent assistant text block.
-#
-# Claude Code writes each content block (text/tool_use/thinking) as its own
-# JSONL line, all with role=assistant. So slurp the last N assistant lines,
-# flatten to text blocks only, and take the last one.
-#
-# Capped at the last 100 assistant lines to keep jq's slurp input bounded
-# for long-running sessions.
-LAST_LINES=$(grep '"role":"assistant"' "$TRANSCRIPT_PATH" | tail -n 100)
-if [[ -z "$LAST_LINES" ]]; then
-  echo "Warning: Superpower loop: Failed to extract assistant messages" >&2
-  echo "   Superpower loop is stopping." >&2
-  rm "$SUPERPOWER_STATE_FILE"
-  exit 0
-fi
+    if [[ -n "$LAST_LINES" ]]; then
+      # Parse recent lines and pull out the final text block.
+      set +e
+      PARSED_LAST_OUTPUT=$(echo "$LAST_LINES" | jq -rs '
+        map(.message.content[]? | select(.type == "text") | .text) | last // ""
+      ' 2>&1)
+      JQ_EXIT=$?
+      set -e
 
-# Parse the recent lines and pull out the final text block.
-# `last // ""` yields empty string when no text blocks exist (e.g. a turn
-# that is all tool calls). That's fine: empty text means no <promise> tag,
-# so the loop simply continues.
-# (Briefly disable errexit so a jq failure can be caught by the $? check.)
-set +e
-LAST_OUTPUT=$(echo "$LAST_LINES" | jq -rs '
-  map(.message.content[]? | select(.type == "text") | .text) | last // ""
-' 2>&1)
-JQ_EXIT=$?
-set -e
-
-# Check if jq succeeded
-if [[ $JQ_EXIT -ne 0 ]]; then
-  echo "Warning: Superpower loop: Failed to parse assistant message JSON" >&2
-  echo "   Error: $LAST_OUTPUT" >&2
-  echo "   This may indicate a transcript format issue." >&2
-  echo "   Superpower loop is stopping." >&2
-  rm "$SUPERPOWER_STATE_FILE"
-  exit 0
+      if [[ $JQ_EXIT -eq 0 ]]; then
+        LAST_OUTPUT="$PARSED_LAST_OUTPUT"
+      fi
+    fi
+  fi
 fi
 
 # Check for completion promise (only if set)
@@ -149,20 +128,65 @@ NEXT_ITERATION=$((ITERATION + 1))
 # Extract prompt (everything after the closing ---)
 # Skip first --- line, skip until second --- line, then print everything after
 # Use i>=2 instead of i==2 to handle --- in prompt content
-PROMPT_TEXT=$(awk '/^---$/{i++; next} i>=2' "$SUPERPOWER_STATE_FILE")
+PROMPT_TEXT=$(printf '%s\n' "$STATE_CONTENT" | awk '/^---$/{i++; next} i>=2')
+
+SKILL_RESOLUTION_ERROR=0
+if echo "$LAST_OUTPUT" | grep -Eqi "Unknown skill:|not available as a standalone skill|Agent type .* not found"; then
+  SKILL_RESOLUTION_ERROR=1
+fi
 
 if [[ -z "$PROMPT_TEXT" ]]; then
-  echo "Warning: Superpower loop: State file corrupted or incomplete" >&2
-  echo "   File: $SUPERPOWER_STATE_FILE" >&2
-  echo "   Problem: No prompt text found" >&2
-  echo "" >&2
-  echo "   This usually means:" >&2
-  echo "     - State file was manually edited" >&2
-  echo "     - File was corrupted during writing" >&2
-  echo "" >&2
-  echo "   Superpower loop is stopping. Run /superpower-loop again to start fresh." >&2
-  rm "$SUPERPOWER_STATE_FILE"
-  exit 0
+  # Fallback for phase-style state files that contain only frontmatter.
+  # Derive the in-progress phase and synthesize a continuation prompt.
+  CURRENT_PHASE_NAME=$(echo "$FRONTMATTER" | awk '
+    /- name:/ { name=$3; gsub(/"/, "", name); next }
+    /status:[[:space:]]*"in_progress"/ { print name; exit }
+  ')
+  CURRENT_PHASE_PROMISE=$(echo "$FRONTMATTER" | awk '
+    /- name:/ { name=$3; gsub(/"/, "", name); next }
+    /status:[[:space:]]*"in_progress"/ { in_progress=1; next }
+    in_progress && /completion_promise:/ {
+      sub(/.*completion_promise:[[:space:]]*/, "", $0);
+      gsub(/"/, "", $0);
+      print $0;
+      exit
+    }
+  ')
+
+  if [[ -n "$CURRENT_PHASE_NAME" ]]; then
+    PHASE_SKILL="superpowers:${CURRENT_PHASE_NAME}"
+    FALLBACK_SKILL_ROOT="${CLAUDE_PLUGIN_ROOT:-superpowers-p2r}"
+    FALLBACK_SKILL_PATH="${FALLBACK_SKILL_ROOT}/skills/${CURRENT_PHASE_NAME}/SKILL.md"
+    PROMPT_TEXT="Continue the active pipeline phase: ${CURRENT_PHASE_NAME}.
+STRICT PROCESS:
+1) Use the exact phase skill first: ${PHASE_SKILL}
+2) If the skill tool cannot resolve it in this environment, immediately fallback to reading:
+   ${FALLBACK_SKILL_PATH}
+   and execute that skill workflow directly from file instructions.
+3) Execute ONLY this phase, do not jump to next phase.
+4) Before phase completion signal, update .claude/superpower-loop.local.md safely (current phase done, next phase in_progress, current_phase index).
+When this phase is genuinely complete, output the exact final line:"
+    if [[ -n "$CURRENT_PHASE_PROMISE" ]]; then
+      PROMPT_TEXT="${PROMPT_TEXT}
+<promise>${CURRENT_PHASE_PROMISE}</promise>"
+    else
+      PROMPT_TEXT="${PROMPT_TEXT}
+<promise>${COMPLETION_PROMISE}</promise>"
+    fi
+  else
+    PROMPT_TEXT="Continue the active superpower loop task from .claude/superpower-loop.local.md."
+  fi
+fi
+
+if [[ "$SKILL_RESOLUTION_ERROR" -eq 1 ]]; then
+  PROMPT_TEXT="${PROMPT_TEXT}
+
+SKILL RESOLUTION RECOVERY:
+- You previously hit a skill/agent resolution error.
+- Do not stop. Use the fallback path-based skill execution:
+  1) Read the local SKILL.md for the current phase.
+  2) Follow it strictly.
+  3) Continue pipeline progression without asking user to restart."
 fi
 
 # Update iteration in frontmatter (portable across macOS and Linux)
@@ -194,16 +218,7 @@ else
   INJECTED_PROMPT="$PROMPT_TEXT"
 fi
 
-# Output JSON to block the stop and feed prompt back
-# The "reason" field contains the prompt that will be sent back to Claude
-jq -n \
-  --arg prompt "$INJECTED_PROMPT" \
-  --arg msg "$SYSTEM_MSG" \
-  '{
-    "decision": "block",
-    "reason": $prompt,
-    "systemMessage": $msg
-  }'
-
-# Exit 0 for successful hook execution
-exit 0
+# Block Stop via exit code 2 and feed prompt back through stderr.
+# This path is the most stable across Claude Code versions for Stop hooks.
+echo "$INJECTED_PROMPT" >&2
+exit 2

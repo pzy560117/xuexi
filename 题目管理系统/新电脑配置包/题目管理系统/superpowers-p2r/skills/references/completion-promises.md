@@ -39,6 +39,8 @@ A completion promise should name a **state** that is objectively true or false, 
 | `superpowers:brainstorming` | `BRAINSTORMING_COMPLETE` | All 4 phases done, design folder committed |
 | `superpowers:writing-plans` | `PLAN_COMPLETE` | All phases done, plan folder committed |
 | `superpowers:executing-plans` | `EXECUTION_COMPLETE` | All tasks executed, verified, and committed |
+| `superpowers:test-gate` | `TEST_GATE_COMPLETE` | Strict test gate passed (no FAIL), report generated |
+| `superpowers:prompt2repo` | `DELIVERY_COMPLETE` | All pipeline phases completed, delivery check passed |
 
 ## Promise Integrity Rules
 

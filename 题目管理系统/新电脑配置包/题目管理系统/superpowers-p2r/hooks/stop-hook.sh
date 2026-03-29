@@ -13,22 +13,29 @@ HOOK_SESSION=$(echo "$HOOK_INPUT" | jq -r '.session_id // ""')
 
 # Find the state file owned by this session.
 # Supports multiple concurrent loops (e.g. parallel tasks in executing-plans)
-# by scanning all .claude/superpower-loop*.local.md files and matching session_id.
+# and scans both the new default path and legacy .claude path.
 SUPERPOWER_STATE_FILE=""
 ALL_CANDIDATES=()
 
-for candidate in .claude/superpower-loop*.local.md; do
-  [[ -f "$candidate" ]] || continue
-  ALL_CANDIDATES+=("$candidate")
-  # Normalize UTF-8 BOM on first line before parsing frontmatter.
-  CANDIDATE_CONTENT=$(awk 'NR==1{sub(/^\xef\xbb\xbf/,"")} {print}' "$candidate")
-  CANDIDATE_FRONTMATTER=$(printf '%s\n' "$CANDIDATE_CONTENT" | sed -n '/^---$/,/^---$/{ /^---$/d; p; }')
-  CANDIDATE_SESSION=$(echo "$CANDIDATE_FRONTMATTER" | grep '^session_id:' | sed 's/session_id: *//' || true)
-  # Match explicit session_id, or fall through for legacy files without one
-  if [[ -z "$CANDIDATE_SESSION" ]] || [[ "$CANDIDATE_SESSION" == "$HOOK_SESSION" ]]; then
-    SUPERPOWER_STATE_FILE="$candidate"
-    break
-  fi
+STATE_GLOBS=(
+  "docs/runtime/superpower-loop*.local.md"
+  ".claude/superpower-loop*.local.md"
+)
+
+for pattern in "${STATE_GLOBS[@]}"; do
+  for candidate in $pattern; do
+    [[ -f "$candidate" ]] || continue
+    ALL_CANDIDATES+=("$candidate")
+    # Normalize UTF-8 BOM on first line before parsing frontmatter.
+    CANDIDATE_CONTENT=$(awk 'NR==1{sub(/^\xef\xbb\xbf/,"")} {print}' "$candidate")
+    CANDIDATE_FRONTMATTER=$(printf '%s\n' "$CANDIDATE_CONTENT" | sed -n '/^---$/,/^---$/{ /^---$/d; p; }')
+    CANDIDATE_SESSION=$(echo "$CANDIDATE_FRONTMATTER" | grep '^session_id:' | sed 's/session_id: *//' || true)
+    # Match explicit session_id, or fall through for legacy files without one
+    if [[ -z "$CANDIDATE_SESSION" ]] || [[ "$CANDIDATE_SESSION" == "$HOOK_SESSION" ]]; then
+      SUPERPOWER_STATE_FILE="$candidate"
+      break 2
+    fi
+  done
 done
 
 if [[ -z "$SUPERPOWER_STATE_FILE" ]]; then
@@ -164,7 +171,7 @@ STRICT PROCESS:
    ${FALLBACK_SKILL_PATH}
    and execute that skill workflow directly from file instructions.
 3) Execute ONLY this phase, do not jump to next phase.
-4) Before phase completion signal, update .claude/superpower-loop.local.md safely (current phase done, next phase in_progress, current_phase index).
+4) Before phase completion signal, update ${SUPERPOWER_STATE_FILE} safely (current phase done, next phase in_progress, current_phase index).
 When this phase is genuinely complete, output the exact final line:"
     if [[ -n "$CURRENT_PHASE_PROMISE" ]]; then
       PROMPT_TEXT="${PROMPT_TEXT}
@@ -174,7 +181,7 @@ When this phase is genuinely complete, output the exact final line:"
 <promise>${COMPLETION_PROMISE}</promise>"
     fi
   else
-    PROMPT_TEXT="Continue the active superpower loop task from .claude/superpower-loop.local.md."
+    PROMPT_TEXT="Continue the active superpower loop task from ${SUPERPOWER_STATE_FILE}."
   fi
 fi
 

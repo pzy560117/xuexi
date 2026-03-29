@@ -9,7 +9,7 @@ description: "Idea2Repo 一键入口: 从模糊的 idea 出发，自动经过头
 1. **绝对拦截，禁止跨阶段越权**：
    无论用户给出的 `<idea>` 有多详细，你都**绝对禁止**在 Phase 2 (Executing Plans) 被正式激活前，使用任何工具（如 `mkdir`, `Write`, `Bash` 等）创建具体的业务代码文件。所有的设想要先落地为设计文档。
 2. **主动管理阶段状态 (State Advancement Duty) ★ 绝对不可省略**：
-   Loop 脚本无法自动猜测进度！当你准备结束当前阶段（即：准备输出诸如 `<promise>BRAINSTORMING_COMPLETE</promise>` 的完成标签）时，你**必须**先使用文件写入工具（Write/Replace）主动修改 `.claude/superpower-loop.local.md` 文件：
+   Loop 脚本无法自动猜测进度！当你准备结束当前阶段（即：准备输出诸如 `<promise>BRAINSTORMING_COMPLETE</promise>` 的完成标签）时，你**必须**先使用文件写入工具（Write/Replace）主动修改 `docs/runtime/superpower-loop.local.md` 文件：
    (1) 将当前 Phase 的 `status` 字段从 `in_progress` 改成 `done`。
    (2) 将链条上下一个非跳过的 Phase 的 `status` 置为 `in_progress`。
    (3) 更新属性 `current_phase` 为相应的索引。
@@ -120,17 +120,17 @@ description: "Idea2Repo 一键入口: 从模糊的 idea 出发，自动经过头
 ### 0. Loop Bootstrap（必须，先于 Phase 0）
 
 ```
-如当前工作目录不存在 `.claude/superpower-loop.local.md`：
+如当前工作目录不存在 `docs/runtime/superpower-loop.local.md`：
 立即执行：
 "${CLAUDE_PLUGIN_ROOT}/scripts/setup-superpower-loop.sh" \
   "Execute Idea2Repo pipeline for idea: <传入的 idea>" \
   --completion-promise "DELIVERY_COMPLETE" \
   --max-iterations ${max_iterations:-100} \
-  --state-file ".claude/superpower-loop.local.md"
+  --state-file "docs/runtime/superpower-loop.local.md"
 
 执行后必须确认以下文件已生成：
-- `.claude/superpower-loop.local.md`（循环状态文件）
-- `.claude/superpower-loop.bootstrap.md`（启动确认文档）
+- `docs/runtime/superpower-loop.local.md`（循环状态文件）
+- `docs/runtime/superpower-loop.bootstrap.md`（启动确认文档）
 ```
 
 ### 1. Phase 0
@@ -236,16 +236,16 @@ description: "Idea2Repo 一键入口: 从模糊的 idea 出发，自动经过头
   "Execute Idea2Repo pipeline for idea: <传入的 idea>" \
   --completion-promise "DELIVERY_COMPLETE" \
   --max-iterations ${max_iterations:-100} \
-  --state-file ".claude/superpower-loop.local.md"
+  --state-file "docs/runtime/superpower-loop.local.md"
 ```
 
 Bootstrap 成功判据：
-- `.claude/superpower-loop.local.md` 存在
-- `.claude/superpower-loop.bootstrap.md` 存在
+- `docs/runtime/superpower-loop.local.md` 存在
+- `docs/runtime/superpower-loop.bootstrap.md` 存在
 
 ### 状态文件设计
 
-写入 `.claude/superpower-loop.local.md` 的内容包含：
+写入 `docs/runtime/superpower-loop.local.md` 的内容包含：
 
 ```yaml
 ---
@@ -347,4 +347,5 @@ phases:
 - `TASK-{ID}/` 目录，包含完整的可交付项目包
 - `docs/designs/` 和 `docs/plans/`
 - `.tmp/self-review-report.md` 自测报告（不打包）
+
 

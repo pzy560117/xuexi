@@ -7,7 +7,7 @@
   "plugins": [
     {
       "name": "superpowers",
-      "version": "2.3.1",
+      "version": "2.3.4",
       "description": "Prompt2Repo 全自动流水线：从 prompt.md 到完整可交付产物，内嵌验收标准、Docker 生成、AI 自测",
       "author": {
         "name": "P2R Team",

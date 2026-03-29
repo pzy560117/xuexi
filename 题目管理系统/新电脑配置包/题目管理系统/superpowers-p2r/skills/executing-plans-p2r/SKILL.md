@@ -14,7 +14,7 @@ description: "Prompt2Repo Phase 2: 按任务计划生成完整项目代码，BDD
 本 Skill 支持两种运行模式，**必须先判断再执行**：
 
 1. **Prompt2Repo 主流程内调用（默认）**  
-   当 `.claude/superpower-loop.local.md` 已存在并包含 `phases:` 时，说明主流程 Loop 已在运行。  
+   当 `docs/runtime/superpower-loop.local.md` 已存在并包含 `phases:` 时，说明主流程 Loop 已在运行。  
    **禁止再次调用** `setup-superpower-loop.sh`，否则会覆盖主状态文件并导致后续 Phase 无法自动推进。
 
 2. **独立调用 `/superpowers:executing-plans-p2r`**  
@@ -25,7 +25,7 @@ description: "Prompt2Repo Phase 2: 按任务计划生成完整项目代码，BDD
   "Execute the Prompt2Repo plan at <resolved-plan-path>. Follow the task index strictly. For each task: read the task file, implement changes, run verification, mark complete." \
   --completion-promise "EXECUTION_COMPLETE" \
   --max-iterations 100 \
-  --state-file ".claude/superpower-loop-executing-plans.local.md"
+  --state-file "docs/runtime/superpower-loop-executing-plans.local.md"
 ```
 
 ## 执行规则
@@ -275,4 +275,5 @@ echo All tests completed.
 - 英文 Prompt 场景下全部产物无中文字符
 
 输出 `<promise>EXECUTION_COMPLETE</promise>` 标记完成，且该标签必须是回复最后一行（后面不得有任何内容）。
+
 

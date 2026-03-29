@@ -2,7 +2,20 @@
 
 Advanced development superpowers for orchestrating complex workflows from idea to execution.
 
-**Version**: 2.3.0
+**Version**: 2.3.4
+
+## 单入口模式（唯一推荐）
+
+仅保留以下入口作为正式工作流：
+
+```bash
+/superpowers:prompt2repo prompt.md --task-id TASK-
+```
+
+说明：
+- `idea2repo` 已下线，不再作为用户入口。
+- 若 `prompt.md` 不存在或为空，流程会自动从最近一条需求文本写入 `prompt.md` 后继续。
+- 若 `--task-id` 传入 `TASK-`，流程会自动补全时间戳并继续执行。
 
 ## Installation
 

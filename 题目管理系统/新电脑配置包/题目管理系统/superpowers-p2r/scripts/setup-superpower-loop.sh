@@ -10,7 +10,7 @@ PROMPT_PARTS=()
 PROMPT_FILE=""
 MAX_ITERATIONS=0
 COMPLETION_PROMISE="null"
-STATE_FILE=".claude/superpower-loop.local.md"
+STATE_FILE="docs/runtime/superpower-loop.local.md"
 
 # Parse options and positional arguments
 while [[ $# -gt 0 ]]; do
@@ -29,9 +29,9 @@ OPTIONS:
   --prompt-file <path>           Read prompt from file (avoids shell escaping issues)
   --max-iterations <n>           Maximum iterations before auto-stop (default: unlimited)
   --completion-promise '<text>'  Promise phrase (USE QUOTES for multi-word)
-  --state-file <path>            Custom state file path (default: .claude/superpower-loop.local.md)
+  --state-file <path>            Custom state file path (default: docs/runtime/superpower-loop.local.md)
                                  Use per-task paths when running multiple loops in parallel,
-                                 e.g. --state-file .claude/superpower-loop-task-42.local.md
+                                 e.g. --state-file docs/runtime/superpower-loop-task-42.local.md
   -h, --help                     Show this help message
 
 DESCRIPTION:
@@ -58,10 +58,10 @@ STOPPING:
 
 MONITORING:
   # View current iteration:
-  grep '^iteration:' .claude/superpower-loop.local.md
+  grep '^iteration:' docs/runtime/superpower-loop.local.md
 
   # View full state:
-  head -10 .claude/superpower-loop.local.md
+  head -10 docs/runtime/superpower-loop.local.md
 HELP_EOF
       exit 0
       ;;
@@ -113,7 +113,7 @@ HELP_EOF
         echo "❌ Error: --state-file requires a path argument" >&2
         echo "" >&2
         echo "   Valid examples:" >&2
-        echo "     --state-file .claude/superpower-loop-task-42.local.md" >&2
+        echo "     --state-file docs/runtime/superpower-loop-task-42.local.md" >&2
         exit 1
       fi
       STATE_FILE="$2"
@@ -167,11 +167,12 @@ if [[ -z "$PROMPT" ]]; then
 fi
 
 # Create state file for stop hook (markdown with YAML frontmatter)
-mkdir -p "$(dirname "$STATE_FILE")"
+STATE_DIR="$(dirname "$STATE_FILE")"
+mkdir -p "$STATE_DIR"
 
 # Guard against accidentally overwriting an active multi-phase pipeline state.
 # This commonly happens when a phase skill starts a nested loop and clobbers
-# the parent `.claude/superpower-loop.local.md`, which breaks auto-continuation.
+# the parent `docs/runtime/superpower-loop.local.md`, which breaks auto-continuation.
 if [[ -f "$STATE_FILE" ]]; then
   EXISTING_CONTENT=$(awk 'NR==1{sub(/^\xef\xbb\xbf/,"")} {print}' "$STATE_FILE")
   EXISTING_FRONTMATTER=$(printf '%s\n' "$EXISTING_CONTENT" | sed -n '/^---$/,/^---$/{ /^---$/d; p; }')
@@ -188,7 +189,7 @@ if [[ -f "$STATE_FILE" ]]; then
     echo "   Starting a nested loop here would break automatic phase continuation." >&2
     echo "" >&2
     echo "   Use an isolated state file instead, for example:" >&2
-    echo "     --state-file .claude/superpower-loop-executing-plans.local.md" >&2
+    echo "     --state-file docs/runtime/superpower-loop-executing-plans.local.md" >&2
     exit 1
   fi
 fi
@@ -223,8 +224,8 @@ $PROMPT
 EOF
 
 # Write a bootstrap confirmation artifact for troubleshooting and audits.
-# This file is intentionally lightweight and human-readable.
-BOOTSTRAP_FILE=".claude/superpower-loop.bootstrap.md"
+# Keep it beside the state file so custom --state-file stays self-contained.
+BOOTSTRAP_FILE="${STATE_DIR}/superpower-loop.bootstrap.md"
 cat > "$BOOTSTRAP_FILE" <<EOF
 # Superpower Loop Bootstrap Confirmation
 
@@ -297,3 +298,4 @@ if [[ "$COMPLETION_PROMISE" != "null" ]]; then
   echo "  true naturally. Do not force it by lying."
   echo "═══════════════════════════════════════════════════════════"
 fi
+

@@ -1,4 +1,4 @@
----
+﻿---
 name: executing-plans
 description: Executes written implementation plans efficiently using agent teams or subagents. This skill should be used when the user has a completed plan.md, asks to "execute the plan", or is ready to run batches of independent tasks in parallel following BDD principles.
 argument-hint: [plan-folder-path]
@@ -14,7 +14,7 @@ Execute written implementation plans efficiently using Superpower Loop for conti
 
 Before any other action, determine whether this skill is running inside an existing multi-phase loop.
 
-1. If `.claude/superpower-loop.local.md` exists and contains `phases:`:
+1. If `docs/runtime/superpower-loop.local.md` exists and contains `phases:`:
    - Treat this run as an in-pipeline phase.
    - **Do NOT start another loop** with `setup-superpower-loop.sh`.
    - Continue directly with plan execution.
@@ -22,11 +22,11 @@ Before any other action, determine whether this skill is running inside an exist
    - Resolve the plan path from `$ARGUMENTS` (if provided) or by searching `docs/plans/`.
    - Start a dedicated loop using an isolated state file:
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/scripts/setup-superpower-loop.sh" "Execute the plan at <resolved-plan-path>. Continue progressing through the superpowers:executing-plans skill phases: Phase 1 (Plan Review) → Phase 2 (Task Creation) → Phase 3 (Batch Execution) → Phase 4 (Verification) → Phase 5 (Git Commit) → Phase 6 (Completion)." --completion-promise "EXECUTION_COMPLETE" --max-iterations 100 --state-file ".claude/superpower-loop-executing-plans.local.md"
+"${CLAUDE_PLUGIN_ROOT}/scripts/setup-superpower-loop.sh" "Execute the plan at <resolved-plan-path>. Continue progressing through the superpowers:executing-plans skill phases: Phase 1 (Plan Review) → Phase 2 (Task Creation) → Phase 3 (Batch Execution) → Phase 4 (Verification) → Phase 5 (Git Commit) → Phase 6 (Completion)." --completion-promise "EXECUTION_COMPLETE" --max-iterations 100 --state-file "docs/runtime/superpower-loop-executing-plans.local.md"
 ```
 3. Only after mode detection/loop startup is complete, proceed to verify the plan folder and continue execution.
 
-**Rationale**: Starting a nested loop on `.claude/superpower-loop.local.md` will overwrite the parent phase state and break automatic continuation.
+**Rationale**: Starting a nested loop on `docs/runtime/superpower-loop.local.md` will overwrite the parent phase state and break automatic continuation.
 
 ## Superpower Loop Integration
 
@@ -231,3 +231,4 @@ All tasks executed and verified, evidence captured, no blockers, user approval r
 - `../../skills/references/git-commit.md` - Git commit patterns and requirements (shared cross-skill resource)
 - `../../skills/references/prompt-patterns.md` - Writing effective task prompts for superpower loop
 - `../../skills/references/completion-promises.md` - Per-task completion promise design
+

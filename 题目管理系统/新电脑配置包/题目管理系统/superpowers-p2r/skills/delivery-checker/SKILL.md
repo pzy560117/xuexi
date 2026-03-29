@@ -1,9 +1,32 @@
 ﻿---
 name: delivery-checker
 description: "Prompt2Repo Phase 4.5: 对 TASK 交付包执行自动化验收，输出统一检查报告并作为最终结束门禁"
+argument-hint: [--task-id]
+user-invocable: false
+allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/scripts/verify-delivery-package.sh:*)", "Bash(${CLAUDE_PLUGIN_ROOT}/scripts/verify-test-gate.sh:*)", "Bash(${CLAUDE_PLUGIN_ROOT}/scripts/verify-runtime-smoke.sh:*)", "Bash(${CLAUDE_PLUGIN_ROOT}/scripts/verify-stability-loop.sh:*)", "Bash(${CLAUDE_PLUGIN_ROOT}/scripts/verify-coverage-gate.sh:*)", "Bash(${CLAUDE_PLUGIN_ROOT}/scripts/verify-github-policy-gate.sh:*)"]
 ---
 
 # Delivery Checker — Prompt2Repo Phase 4.5
+
+## Superpower Loop Integration
+
+本 Skill 在 Prompt2Repo 主流程 Ralph-Loop 内运行，**禁止**二次启动 `setup-superpower-loop.sh`。
+
+**CRITICAL**: 输出 `<promise>DELIVERY_COMPLETE</promise>` 时必须遵守：
+- 所有质量门禁脚本执行完成
+- `TASK-{ID}/delivery-check-report.md` 已生成
+- 无 FAIL 级阻塞项
+
+**ABSOLUTE LAST OUTPUT RULE**: Promise 标签必须是回复的**最后一行**，后面不得有任何内容。
+
+## Background Knowledge
+
+**核心概念**: 交付验收是整个流水线的最终关口，确保交付包在独立环境下可以通过所有质量检查。
+
+- **MANDATORY**: 必须在交付包内重新执行所有质量门禁（test-gate, runtime-smoke, stability-loop, coverage-gate, policy-gate）
+- **MANDATORY**: 任一门禁失败必须先修复后再继续
+- **MANDATORY**: 最多复验 3 轮
+- **PROHIBITED**: 不得在有 FAIL 级问题时结束流水线
 
 ## 概述
 
@@ -97,7 +120,7 @@ TASK-{ID}/
 - 阻塞项修复状态
 - 报告文件路径
 
-## 完成条件
+## Exit Criteria
 
 当以下全部满足时，Phase 4.5 完成：
 - `verify-delivery-package.sh` 执行完成
@@ -109,4 +132,14 @@ TASK-{ID}/
 ## 跳过条件
 
 当传入 `--skip-delivery-check` 参数时，跳过本 Phase，直接输出 `<promise>DELIVERY_COMPLETE</promise>`（最后一行）。
+
+## References
+
+- `./scripts/verify-delivery-package.sh` - 交付包验收脚本
+- `../test-gate/SKILL.md` - 测试门禁
+- `../runtime-smoke/SKILL.md` - 运行态冒烟
+- `../stability-loop/SKILL.md` - 稳定性循环
+- `../coverage-gate/SKILL.md` - 覆盖率门禁
+- `../policy-gate/SKILL.md` - 策略门禁
+- `../../skills/references/completion-promises.md` - Promise 设计规范
 

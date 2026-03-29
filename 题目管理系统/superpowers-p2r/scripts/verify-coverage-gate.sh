@@ -10,8 +10,9 @@ parse_args() {
   REPO_DIR="$PWD"
   REPORT_FILE=".tmp/coverage-gate-report.md"
   STRICT_MODE="true"
-  MIN_LINE_COVERAGE=70
-  MIN_BRANCH_COVERAGE=50
+  FAIL_ON_WARN="true"
+  MIN_LINE_COVERAGE=80
+  MIN_BRANCH_COVERAGE=70
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -25,6 +26,10 @@ parse_args() {
         ;;
       --strict)
         STRICT_MODE="$2"
+        shift 2
+        ;;
+      --fail-on-warn)
+        FAIL_ON_WARN="$2"
         shift 2
         ;;
       --min-line-coverage)
@@ -43,8 +48,9 @@ Options:
   --repo-dir <path>             Project root (default: current directory)
   --report-file <path>          Report path (default: .tmp/coverage-gate-report.md)
   --strict <true|false>         Fail on capability gaps (default: true)
-  --min-line-coverage <n>       Minimum line coverage percentage (default: 70)
-  --min-branch-coverage <n>     Minimum branch coverage percentage (default: 50)
+  --fail-on-warn <true|false>   Treat WARN as gate failure (default: true)
+  --min-line-coverage <n>       Minimum line coverage percentage (default: 80)
+  --min-branch-coverage <n>     Minimum branch coverage percentage (default: 70)
 HELP
         exit 0
         ;;
@@ -57,6 +63,7 @@ HELP
 
   [[ -d "$REPO_DIR" ]] || { echo "Repo directory not found: $REPO_DIR" >&2; return 1; }
   [[ "$STRICT_MODE" =~ ^(true|false)$ ]] || { echo "--strict must be true|false" >&2; return 1; }
+  [[ "$FAIL_ON_WARN" =~ ^(true|false)$ ]] || { echo "--fail-on-warn must be true|false" >&2; return 1; }
   [[ "$MIN_LINE_COVERAGE" =~ ^[0-9]+$ ]] || { echo "--min-line-coverage must be number" >&2; return 1; }
   [[ "$MIN_BRANCH_COVERAGE" =~ ^[0-9]+$ ]] || { echo "--min-branch-coverage must be number" >&2; return 1; }
 }
@@ -92,6 +99,24 @@ strict_or_warn() {
   else
     warn_check "$msg"
   fi
+}
+
+# Extract pytest passed test-case count from output.
+extract_pytest_passed_count() {
+  local output="$1"
+  local count
+  count="$(printf '%s\n' "$output" | perl -ne 'if (/([0-9]+)\s+passed\b/) { $v=$1 } END { print $v if defined $v }' 2>/dev/null || true)"
+  echo "$count"
+}
+
+# Convert fractional rate (0.87) to integer percentage (87).
+rate_to_percent() {
+  local rate="$1"
+  if [[ -z "$rate" ]]; then
+    echo ""
+    return
+  fi
+  awk -v r="$rate" 'BEGIN { printf("%d", r*100) }'
 }
 
 # Parse JaCoCo XML counters and compute integer percentages.
@@ -188,6 +213,111 @@ run_maven_coverage_gate() {
   fi
 }
 
+# Parse Cobertura/coverage.py XML line-rate and branch-rate.
+parse_python_coverage_xml_rates() {
+  local coverage_xml="$1"
+  local line_rate
+  local branch_rate
+  line_rate="$(grep -o 'line-rate="[0-9.]\+"' "$coverage_xml" | head -n 1 | sed -E 's/line-rate="([0-9.]+)"/\1/' || true)"
+  branch_rate="$(grep -o 'branch-rate="[0-9.]\+"' "$coverage_xml" | head -n 1 | sed -E 's/branch-rate="([0-9.]+)"/\1/' || true)"
+
+  LINE_COVERAGE="$(rate_to_percent "$line_rate")"
+  BRANCH_COVERAGE="$(rate_to_percent "$branch_rate")"
+}
+
+# Execute Python pytest coverage gate with line + branch thresholds.
+run_python_coverage_gate() {
+  if ! command -v python >/dev/null 2>&1; then
+    strict_or_warn "python is unavailable; cannot run Python coverage gate"
+    return
+  fi
+  if ! python -m pytest --help >/dev/null 2>&1; then
+    strict_or_warn "pytest is unavailable; cannot run Python coverage gate"
+    return
+  fi
+  if ! python -m pytest --help 2>/dev/null | grep -q -- '--cov'; then
+    strict_or_warn "pytest-cov is unavailable; cannot run Python coverage gate"
+    return
+  fi
+
+  local test_targets=()
+  [[ -d "$REPO_DIR/unit_tests" ]] && test_targets+=("$REPO_DIR/unit_tests")
+  [[ -d "$REPO_DIR/tests" ]] && test_targets+=("$REPO_DIR/tests")
+  [[ -d "$REPO_DIR/API_tests" ]] && test_targets+=("$REPO_DIR/API_tests")
+  if [[ "${#test_targets[@]}" -eq 0 ]]; then
+    fail_check "No Python test directories found (unit_tests/tests/API_tests)"
+    return
+  fi
+
+  local cov_target="$REPO_DIR"
+  [[ -d "$REPO_DIR/backend/app" ]] && cov_target="$REPO_DIR/backend/app"
+  [[ -d "$REPO_DIR/src" ]] && cov_target="$REPO_DIR/src"
+
+  local coverage_xml
+  coverage_xml="$(mktemp)"
+  local pytest_log
+  pytest_log="$(mktemp)"
+  set +e
+  PYTHONPATH="$REPO_DIR/backend${PYTHONPATH:+:$PYTHONPATH}" \
+    python -m pytest "${test_targets[@]}" \
+      -q \
+      --maxfail=1 \
+      --disable-warnings \
+      --cov="$cov_target" \
+      --cov-branch \
+      --cov-report=term \
+      --cov-report="xml:${coverage_xml}" >"$pytest_log" 2>&1
+  local pytest_exit=$?
+  set -e
+
+  PYTEST_OUTPUT="$(cat "$pytest_log")"
+  rm -f "$pytest_log"
+
+  if [[ "$pytest_exit" -ne 0 ]]; then
+    fail_check "pytest coverage run failed"
+    PYTEST_LOG_SNIPPET="$(echo "$PYTEST_OUTPUT" | tail -n 120)"
+    rm -f "$coverage_xml"
+    return
+  fi
+  pass_check "pytest coverage run passed"
+
+  local passed_count
+  passed_count="$(extract_pytest_passed_count "$PYTEST_OUTPUT")"
+  if [[ -z "$passed_count" ]]; then
+    strict_or_warn "Unable to parse pytest passed test-case count"
+  else
+    pass_check "pytest passed test cases: ${passed_count}"
+  fi
+
+  if [[ ! -f "$coverage_xml" ]]; then
+    strict_or_warn "coverage.xml is missing after pytest run"
+    return
+  fi
+
+  parse_python_coverage_xml_rates "$coverage_xml"
+  rm -f "$coverage_xml"
+
+  if [[ -z "${LINE_COVERAGE:-}" ]]; then
+    strict_or_warn "Unable to parse Python line coverage from coverage.xml"
+    return
+  fi
+  if [[ "$LINE_COVERAGE" -ge "$MIN_LINE_COVERAGE" ]]; then
+    pass_check "Line coverage ${LINE_COVERAGE}% >= ${MIN_LINE_COVERAGE}%"
+  else
+    fail_check "Line coverage ${LINE_COVERAGE}% < ${MIN_LINE_COVERAGE}%"
+  fi
+
+  if [[ -z "${BRANCH_COVERAGE:-}" ]]; then
+    strict_or_warn "Unable to parse Python branch coverage from coverage.xml"
+    return
+  fi
+  if [[ "$BRANCH_COVERAGE" -ge "$MIN_BRANCH_COVERAGE" ]]; then
+    pass_check "Branch coverage ${BRANCH_COVERAGE}% >= ${MIN_BRANCH_COVERAGE}%"
+  else
+    fail_check "Branch coverage ${BRANCH_COVERAGE}% < ${MIN_BRANCH_COVERAGE}%"
+  fi
+}
+
 # Persist markdown report to disk.
 write_report() {
   mkdir -p "$(dirname "$REPORT_FILE")"
@@ -200,6 +330,7 @@ write_report() {
     echo "- Repo: \`$REPO_DIR\`"
     echo "- Generated At (UTC): \`$now\`"
     echo "- Strict Mode: \`$STRICT_MODE\`"
+    echo "- Fail On Warn: \`$FAIL_ON_WARN\`"
     echo "- Min Line Coverage: \`${MIN_LINE_COVERAGE}%\`"
     echo "- Min Branch Coverage: \`${MIN_BRANCH_COVERAGE}%\`"
     echo "- Result: PASS=$PASS_COUNT, WARN=$WARN_COUNT, FAIL=$FAIL_COUNT"
@@ -216,6 +347,15 @@ write_report() {
       echo "$MAVEN_LOG_SNIPPET"
       echo '```'
     fi
+
+    if [[ -n "${PYTEST_LOG_SNIPPET:-}" ]]; then
+      echo
+      echo "## Pytest Coverage Snippet"
+      echo
+      echo '```text'
+      echo "$PYTEST_LOG_SNIPPET"
+      echo '```'
+    fi
   } >"$REPORT_FILE"
 }
 
@@ -228,11 +368,15 @@ main() {
   LINE_COVERAGE=0
   BRANCH_COVERAGE=-1
   MAVEN_LOG_SNIPPET=""
+  PYTEST_LOG_SNIPPET=""
+  PYTEST_OUTPUT=""
 
   parse_args "$@" || exit 2
 
   if [[ -f "$REPO_DIR/pom.xml" ]]; then
     run_maven_coverage_gate
+  elif [[ -f "$REPO_DIR/requirements.txt" ]] || [[ -f "$REPO_DIR/pyproject.toml" ]] || [[ -d "$REPO_DIR/unit_tests" ]] || [[ -d "$REPO_DIR/tests" ]]; then
+    run_python_coverage_gate
   else
     strict_or_warn "Unsupported coverage gate stack: pom.xml not found"
   fi
@@ -243,6 +387,10 @@ main() {
   echo "Report: $REPORT_FILE"
 
   if [[ "$FAIL_COUNT" -gt 0 ]]; then
+    exit 1
+  fi
+  if [[ "$FAIL_ON_WARN" == "true" ]] && [[ "$WARN_COUNT" -gt 0 ]]; then
+    echo "Coverage gate failed because WARN exists and --fail-on-warn=true" >&2
     exit 1
   fi
   exit 0

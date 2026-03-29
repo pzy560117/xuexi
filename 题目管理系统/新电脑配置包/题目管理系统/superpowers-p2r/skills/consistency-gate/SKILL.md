@@ -1,9 +1,33 @@
 ---
 name: consistency-gate
 description: "Prompt2Repo Phase 1.5: 跨制品一致性分析，检测规格-设计-任务之间的冲突、遗漏和歧义"
+argument-hint: []
+user-invocable: false
+allowed-tools: []
 ---
 
 # Consistency Gate — Prompt2Repo Phase 1.5
+
+## Superpower Loop Integration
+
+本 Skill 在 Prompt2Repo 主流程 Ralph-Loop 内运行，**禁止**二次启动 `setup-superpower-loop.sh`。
+
+**CRITICAL**: 输出 `<promise>ANALYSIS_COMPLETE</promise>` 时必须遵守：
+- 6 项检测全部完成
+- 无 CRITICAL 级别问题
+- 分析报告已生成
+
+**ABSOLUTE LAST OUTPUT RULE**: Promise 标签必须是回复的**最后一行**，后面不得有任何内容。
+
+## Background Knowledge
+
+**核心概念**: 一致性分析确保 spec、架构、任务三者对齐，避免“设计与测试不一致”。
+
+- **MANDATORY**: 必须使用子代理执行多视角分析
+- **MANDATORY**: 建立双向追踪矩阵（FR → BDD → 架构 → 任务）
+- **MANDATORY**: CRITICAL 级问题必须自动修复
+- **PROHIBITED**: 不得跳过安全对齐检测
+- **PROHIBITED**: 不得在有 CRITICAL 问题时输出 Promise
 
 ## 概述
 
@@ -155,15 +179,21 @@ BDD 场景 → 任务计划（是否有对应的测试任务？）
 
 修复后重新运行 Step 3-4 验证（最多 2 轮）。
 
-## 完成条件
+## Exit Criteria
 
 当以下全部满足时，Phase 1.5 完成：
 - `docs/specs/analysis-report.md` 已生成
 - 无 CRITICAL 级别问题（允许 MEDIUM/LOW 保留）
 - 修复的文件已更新
 
-输出 `ANALYSIS_COMPLETE` 标记完成。
+输出 `<promise>ANALYSIS_COMPLETE</promise>`，且该标签必须是回复最后一行。
 
 ## 跳过条件
 
 当传入 `--skip-analysis` 参数时，跳过本 Phase，直接进入 Phase 2。
+
+## References
+
+- `../code-reviewer/SKILL.md` - 代码审查子代理
+- `../speckit-analyze/SKILL.md` - speckit-analyze 方法论来源
+- `../../skills/references/completion-promises.md` - Promise 设计规范

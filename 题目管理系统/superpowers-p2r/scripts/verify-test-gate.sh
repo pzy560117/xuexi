@@ -9,10 +9,15 @@ set -euo pipefail
 parse_args() {
   REPO_DIR="$PWD"
   REPORT_FILE=".tmp/test-gate-report.md"
-  MIN_UNIT_TEST_FILES=3
-  MIN_API_TEST_FILES=3
-  MIN_UNIT_COVERAGE=70
-  RUN_API_TESTS="auto" # auto | always | never
+  MIN_UNIT_TEST_FILES=5
+  MIN_API_TEST_FILES=5
+  MIN_UNIT_TEST_CASES=20
+  MIN_API_TEST_CASES=10
+  MIN_UNIT_COVERAGE=80
+  RUN_API_TESTS="always" # auto | always | never
+  UNIT_REPEAT=3
+  API_REPEAT=2
+  FAIL_ON_WARN="true"
   STRICT_MODE="true"
   API_WAIT_SECONDS=120
   HEALTHCHECK_URL="http://localhost:8000/health"
@@ -35,12 +40,32 @@ parse_args() {
         MIN_API_TEST_FILES="$2"
         shift 2
         ;;
+      --min-unit-test-cases)
+        MIN_UNIT_TEST_CASES="$2"
+        shift 2
+        ;;
+      --min-api-test-cases)
+        MIN_API_TEST_CASES="$2"
+        shift 2
+        ;;
       --min-unit-coverage)
         MIN_UNIT_COVERAGE="$2"
         shift 2
         ;;
       --run-api-tests)
         RUN_API_TESTS="$2"
+        shift 2
+        ;;
+      --unit-repeat)
+        UNIT_REPEAT="$2"
+        shift 2
+        ;;
+      --api-repeat)
+        API_REPEAT="$2"
+        shift 2
+        ;;
+      --fail-on-warn)
+        FAIL_ON_WARN="$2"
         shift 2
         ;;
       --strict)
@@ -62,10 +87,15 @@ Usage: verify-test-gate.sh [options]
 Options:
   --repo-dir <path>              Project root (default: current directory)
   --report-file <path>           Report path (default: .tmp/test-gate-report.md)
-  --min-unit-test-files <n>      Minimum unit test file count (default: 3)
-  --min-api-test-files <n>       Minimum API test file count (default: 3)
-  --min-unit-coverage <n>        Minimum unit coverage percent (default: 70)
-  --run-api-tests <mode>         auto|always|never (default: auto)
+  --min-unit-test-files <n>      Minimum unit test file count (default: 5)
+  --min-api-test-files <n>       Minimum API test file count (default: 5)
+  --min-unit-test-cases <n>      Minimum unit test cases per run (default: 20)
+  --min-api-test-cases <n>       Minimum API test cases per run (default: 10)
+  --min-unit-coverage <n>        Minimum unit coverage percent (default: 80)
+  --run-api-tests <mode>         auto|always|never (default: always)
+  --unit-repeat <n>              Unit test repeat count for flaky detection (default: 3)
+  --api-repeat <n>               API test repeat count for flaky detection (default: 2)
+  --fail-on-warn <true|false>    Treat WARN as gate failure (default: true)
   --strict <true|false>          Fail if env cannot execute tests (default: true)
   --api-wait-seconds <n>         API readiness timeout seconds (default: 120)
   --healthcheck-url <url>        API health endpoint (default: http://localhost:8000/health)
@@ -82,9 +112,16 @@ HELP
   [[ -d "$REPO_DIR" ]] || { echo "Repo directory not found: $REPO_DIR" >&2; return 1; }
   [[ "$RUN_API_TESTS" =~ ^(auto|always|never)$ ]] || { echo "--run-api-tests must be auto|always|never" >&2; return 1; }
   [[ "$STRICT_MODE" =~ ^(true|false)$ ]] || { echo "--strict must be true|false" >&2; return 1; }
+  [[ "$FAIL_ON_WARN" =~ ^(true|false)$ ]] || { echo "--fail-on-warn must be true|false" >&2; return 1; }
   [[ "$MIN_UNIT_TEST_FILES" =~ ^[0-9]+$ ]] || { echo "--min-unit-test-files must be number" >&2; return 1; }
   [[ "$MIN_API_TEST_FILES" =~ ^[0-9]+$ ]] || { echo "--min-api-test-files must be number" >&2; return 1; }
+  [[ "$MIN_UNIT_TEST_CASES" =~ ^[0-9]+$ ]] || { echo "--min-unit-test-cases must be number" >&2; return 1; }
+  [[ "$MIN_API_TEST_CASES" =~ ^[0-9]+$ ]] || { echo "--min-api-test-cases must be number" >&2; return 1; }
   [[ "$MIN_UNIT_COVERAGE" =~ ^[0-9]+$ ]] || { echo "--min-unit-coverage must be number" >&2; return 1; }
+  [[ "$UNIT_REPEAT" =~ ^[0-9]+$ ]] || { echo "--unit-repeat must be number" >&2; return 1; }
+  [[ "$API_REPEAT" =~ ^[0-9]+$ ]] || { echo "--api-repeat must be number" >&2; return 1; }
+  [[ "$UNIT_REPEAT" -gt 0 ]] || { echo "--unit-repeat must be > 0" >&2; return 1; }
+  [[ "$API_REPEAT" -gt 0 ]] || { echo "--api-repeat must be > 0" >&2; return 1; }
   [[ "$API_WAIT_SECONDS" =~ ^[0-9]+$ ]] || { echo "--api-wait-seconds must be number" >&2; return 1; }
 }
 
@@ -119,6 +156,57 @@ strict_or_warn() {
   else
     warn_check "$msg"
   fi
+}
+
+# Extract pytest passed test-case count from output.
+extract_pytest_passed_count() {
+  local output="$1"
+  local count
+  count="$(printf '%s\n' "$output" | perl -ne 'if (/([0-9]+)\s+passed\b/) { $v=$1 } END { print $v if defined $v }' 2>/dev/null || true)"
+  echo "$count"
+}
+
+# Sum surefire XML tests="N" counters for Maven/JUnit runs.
+sum_surefire_test_count() {
+  local report_dir="$1"
+  if [[ ! -d "$report_dir" ]]; then
+    echo ""
+    return
+  fi
+  local sum
+  sum="$(grep -Rho 'tests="[0-9]\+"' "$report_dir" 2>/dev/null | sed -E 's/tests="([0-9]+)"/\1/' | awk '{s+=$1} END {if (NR>0) print s}' || true)"
+  echo "$sum"
+}
+
+# Ensure test suite covers multiple quality dimensions (auth/permission/validation/etc).
+check_test_dimension_coverage() {
+  local unit_root="$REPO_DIR/unit_tests"
+  local api_root="$REPO_DIR/API_tests"
+  local scan_roots=()
+  [[ -d "$unit_root" ]] && scan_roots+=("$unit_root")
+  [[ -d "$api_root" ]] && scan_roots+=("$api_root")
+
+  if [[ "${#scan_roots[@]}" -eq 0 ]]; then
+    fail_check "Cannot check test dimensions: unit_tests/API_tests directories are missing"
+    return
+  fi
+
+  check_dimension() {
+    local label="$1"
+    local pattern="$2"
+    if grep -R -E -i -n -- "$pattern" "${scan_roots[@]}" >/dev/null 2>&1; then
+      pass_check "Test dimension covered: ${label}"
+    else
+      fail_check "Test dimension missing: ${label}"
+    fi
+  }
+
+  check_dimension "auth" 'auth|login|token|jwt'
+  check_dimension "permission" 'permission|rbac|role|forbidden|unauthorized|403|401'
+  check_dimension "validation" 'invalid|required|missing|bad[_ -]?request|422|400|schema'
+  check_dimension "workflow" 'workflow|state|transition|approve|reject|cancel'
+  check_dimension "error-path" 'exception|error|fail|timeout|retry'
+  check_dimension "boundary" 'limit|max|min|boundary|edge|overflow|underflow'
 }
 
 # Count test files for unit/API scopes.
@@ -197,45 +285,71 @@ run_maven_unit_tests_with_coverage() {
     pom_dir="$REPO_DIR/unit_tests"
   fi
 
-  UNIT_TEST_LOG=$(mktemp)
-  set +e
-  (cd "$pom_dir" && mvn -q test) >"$UNIT_TEST_LOG" 2>&1
-  UNIT_TEST_EXIT=$?
-  set -e
+  local min_coverage_seen=999
+  local min_cases_seen=999999
+  local run_index=1
+  while [[ "$run_index" -le "$UNIT_REPEAT" ]]; do
+    UNIT_TEST_LOG=$(mktemp)
+    set +e
+    (cd "$pom_dir" && mvn -q test) >"$UNIT_TEST_LOG" 2>&1
+    UNIT_TEST_EXIT=$?
+    set -e
 
-  UNIT_TEST_OUTPUT="$(cat "$UNIT_TEST_LOG")"
-  rm -f "$UNIT_TEST_LOG"
+    UNIT_TEST_OUTPUT="$(cat "$UNIT_TEST_LOG")"
+    rm -f "$UNIT_TEST_LOG"
 
-  if [[ "$UNIT_TEST_EXIT" -ne 0 ]]; then
-    fail_check "Maven unit tests failed"
-    UNIT_LOG_SNIPPET="$(echo "$UNIT_TEST_OUTPUT" | tail -n 80)"
-    return
-  fi
-  pass_check "Maven unit tests passed"
+    if [[ "$UNIT_TEST_EXIT" -ne 0 ]]; then
+      fail_check "Maven unit tests failed on run ${run_index}/${UNIT_REPEAT}"
+      UNIT_LOG_SNIPPET="$(echo "$UNIT_TEST_OUTPUT" | tail -n 80)"
+      return
+    fi
 
-  local jacoco_xml=""
-  if [[ -f "$pom_dir/target/site/jacoco/jacoco.xml" ]]; then
-    jacoco_xml="$pom_dir/target/site/jacoco/jacoco.xml"
-  elif [[ -f "$REPO_DIR/target/site/jacoco/jacoco.xml" ]]; then
-    jacoco_xml="$REPO_DIR/target/site/jacoco/jacoco.xml"
-  fi
+    local surefire_dir="$pom_dir/target/surefire-reports"
+    local case_count
+    case_count="$(sum_surefire_test_count "$surefire_dir")"
+    if [[ -z "$case_count" ]]; then
+      strict_or_warn "Unable to parse Maven unit test case count on run ${run_index}/${UNIT_REPEAT}"
+    elif [[ "$case_count" -lt "$MIN_UNIT_TEST_CASES" ]]; then
+      fail_check "Maven unit test case count ${case_count} < ${MIN_UNIT_TEST_CASES} on run ${run_index}/${UNIT_REPEAT}"
+    else
+      pass_check "Maven unit test case count ${case_count} >= ${MIN_UNIT_TEST_CASES} on run ${run_index}/${UNIT_REPEAT}"
+    fi
 
-  if [[ -z "$jacoco_xml" ]]; then
-    strict_or_warn "JaCoCo coverage report missing; cannot enforce unit coverage threshold"
-    return
-  fi
+    if [[ -n "$case_count" ]] && [[ "$case_count" -lt "$min_cases_seen" ]]; then
+      min_cases_seen="$case_count"
+    fi
 
-  UNIT_COVERAGE="$(parse_jacoco_line_coverage "$jacoco_xml")"
-  if [[ -z "$UNIT_COVERAGE" ]]; then
-    strict_or_warn "Unable to parse JaCoCo LINE coverage percentage"
-    return
-  fi
+    local jacoco_xml=""
+    if [[ -f "$pom_dir/target/site/jacoco/jacoco.xml" ]]; then
+      jacoco_xml="$pom_dir/target/site/jacoco/jacoco.xml"
+    elif [[ -f "$REPO_DIR/target/site/jacoco/jacoco.xml" ]]; then
+      jacoco_xml="$REPO_DIR/target/site/jacoco/jacoco.xml"
+    fi
 
-  if [[ "$UNIT_COVERAGE" -ge "$MIN_UNIT_COVERAGE" ]]; then
-    pass_check "Unit coverage ${UNIT_COVERAGE}% >= ${MIN_UNIT_COVERAGE}%"
-  else
-    fail_check "Unit coverage ${UNIT_COVERAGE}% < ${MIN_UNIT_COVERAGE}%"
-  fi
+    if [[ -z "$jacoco_xml" ]]; then
+      strict_or_warn "JaCoCo coverage report missing; cannot enforce unit coverage threshold on run ${run_index}/${UNIT_REPEAT}"
+      return
+    fi
+
+    UNIT_COVERAGE="$(parse_jacoco_line_coverage "$jacoco_xml")"
+    if [[ -z "$UNIT_COVERAGE" ]]; then
+      strict_or_warn "Unable to parse JaCoCo LINE coverage percentage on run ${run_index}/${UNIT_REPEAT}"
+      return
+    fi
+
+    if [[ "$UNIT_COVERAGE" -ge "$MIN_UNIT_COVERAGE" ]]; then
+      pass_check "Unit coverage ${UNIT_COVERAGE}% >= ${MIN_UNIT_COVERAGE}% on run ${run_index}/${UNIT_REPEAT}"
+    else
+      fail_check "Unit coverage ${UNIT_COVERAGE}% < ${MIN_UNIT_COVERAGE}% on run ${run_index}/${UNIT_REPEAT}"
+    fi
+
+    if [[ "$UNIT_COVERAGE" -lt "$min_coverage_seen" ]]; then
+      min_coverage_seen="$UNIT_COVERAGE"
+    fi
+    run_index=$((run_index + 1))
+  done
+
+  pass_check "Maven unit tests are stable across ${UNIT_REPEAT} runs (min cases=${min_cases_seen}, min coverage=${min_coverage_seen}%)"
 }
 
 # Execute unit tests with coverage threshold.
@@ -265,51 +379,74 @@ run_unit_tests_with_coverage() {
     return
   fi
 
-  UNIT_TEST_LOG=$(mktemp)
-  set +e
-  PYTHONPATH="$REPO_DIR/backend${PYTHONPATH:+:$PYTHONPATH}" \
-    python -m pytest "$REPO_DIR/unit_tests" \
-      -q \
-      --maxfail=1 \
-      --disable-warnings \
-      --cov="$REPO_DIR/backend/app" \
-      --cov-report=term >"$UNIT_TEST_LOG" 2>&1
-  UNIT_TEST_EXIT=$?
-  set -e
+  local run_index=1
+  local min_coverage_seen=999
+  local min_cases_seen=999999
+  while [[ "$run_index" -le "$UNIT_REPEAT" ]]; do
+    UNIT_TEST_LOG=$(mktemp)
+    set +e
+    PYTHONPATH="$REPO_DIR/backend${PYTHONPATH:+:$PYTHONPATH}" \
+      python -m pytest "$REPO_DIR/unit_tests" \
+        -q \
+        --maxfail=1 \
+        --disable-warnings \
+        --cov="$REPO_DIR/backend/app" \
+        --cov-report=term >"$UNIT_TEST_LOG" 2>&1
+    UNIT_TEST_EXIT=$?
+    set -e
 
-  UNIT_TEST_OUTPUT="$(cat "$UNIT_TEST_LOG")"
-  rm -f "$UNIT_TEST_LOG"
+    UNIT_TEST_OUTPUT="$(cat "$UNIT_TEST_LOG")"
+    rm -f "$UNIT_TEST_LOG"
 
-  if [[ "$UNIT_TEST_EXIT" -ne 0 ]]; then
-    fail_check "Unit tests failed"
-    UNIT_LOG_SNIPPET="$(echo "$UNIT_TEST_OUTPUT" | tail -n 80)"
-    return
-  fi
+    if [[ "$UNIT_TEST_EXIT" -ne 0 ]]; then
+      fail_check "Unit tests failed on run ${run_index}/${UNIT_REPEAT}"
+      UNIT_LOG_SNIPPET="$(echo "$UNIT_TEST_OUTPUT" | tail -n 80)"
+      return
+    fi
 
-  pass_check "Unit tests passed"
+    local unit_cases
+    unit_cases="$(extract_pytest_passed_count "$UNIT_TEST_OUTPUT")"
+    if [[ -z "$unit_cases" ]]; then
+      strict_or_warn "Unable to parse unit test case count on run ${run_index}/${UNIT_REPEAT}"
+    elif [[ "$unit_cases" -lt "$MIN_UNIT_TEST_CASES" ]]; then
+      fail_check "Unit test case count ${unit_cases} < ${MIN_UNIT_TEST_CASES} on run ${run_index}/${UNIT_REPEAT}"
+    else
+      pass_check "Unit test case count ${unit_cases} >= ${MIN_UNIT_TEST_CASES} on run ${run_index}/${UNIT_REPEAT}"
+    fi
 
-  UNIT_COVERAGE="$(echo "$UNIT_TEST_OUTPUT" | awk '
-    /TOTAL/ {
-      for (i = 1; i <= NF; i++) {
-        if ($i ~ /%$/) {
-          gsub("%", "", $i);
-          cov = $i;
+    UNIT_COVERAGE="$(echo "$UNIT_TEST_OUTPUT" | awk '
+      /TOTAL/ {
+        for (i = 1; i <= NF; i++) {
+          if ($i ~ /%$/) {
+            gsub("%", "", $i);
+            cov = $i;
+          }
         }
       }
-    }
-    END { if (cov != "") print cov; }
-  ')"
+      END { if (cov != "") print cov; }
+    ')"
 
-  if [[ -z "${UNIT_COVERAGE:-}" ]]; then
-    strict_or_warn "Unable to parse unit test coverage percentage"
-    return
-  fi
+    if [[ -z "${UNIT_COVERAGE:-}" ]]; then
+      strict_or_warn "Unable to parse unit test coverage percentage on run ${run_index}/${UNIT_REPEAT}"
+      return
+    fi
 
-  if [[ "$UNIT_COVERAGE" -ge "$MIN_UNIT_COVERAGE" ]]; then
-    pass_check "Unit coverage ${UNIT_COVERAGE}% >= ${MIN_UNIT_COVERAGE}%"
-  else
-    fail_check "Unit coverage ${UNIT_COVERAGE}% < ${MIN_UNIT_COVERAGE}%"
-  fi
+    if [[ "$UNIT_COVERAGE" -ge "$MIN_UNIT_COVERAGE" ]]; then
+      pass_check "Unit coverage ${UNIT_COVERAGE}% >= ${MIN_UNIT_COVERAGE}% on run ${run_index}/${UNIT_REPEAT}"
+    else
+      fail_check "Unit coverage ${UNIT_COVERAGE}% < ${MIN_UNIT_COVERAGE}% on run ${run_index}/${UNIT_REPEAT}"
+    fi
+
+    if [[ -n "$unit_cases" ]] && [[ "$unit_cases" -lt "$min_cases_seen" ]]; then
+      min_cases_seen="$unit_cases"
+    fi
+    if [[ "$UNIT_COVERAGE" -lt "$min_coverage_seen" ]]; then
+      min_coverage_seen="$UNIT_COVERAGE"
+    fi
+    run_index=$((run_index + 1))
+  done
+
+  pass_check "Unit tests are stable across ${UNIT_REPEAT} runs (min cases=${min_cases_seen}, min coverage=${min_coverage_seen}%)"
 }
 
 # Wait for API health endpoint during integration checks.
@@ -342,7 +479,7 @@ PY
 # Run API integration tests with docker-compose based environment.
 run_api_tests() {
   if [[ "$RUN_API_TESTS" == "never" ]]; then
-    warn_check "API tests skipped by configuration (--run-api-tests=never)"
+    fail_check "API tests skipped by configuration (--run-api-tests=never) under strict gate"
     return
   fi
 
@@ -400,46 +537,74 @@ run_api_tests() {
   fi
 
   local api_runner=""
-  if [[ -f "$REPO_DIR/run_api_tests.sh" ]]; then
-    set +e
-    (cd "$REPO_DIR" && bash ./run_api_tests.sh) >"$API_TEST_LOG" 2>&1
-    API_TEST_EXIT=$?
-    set -e
-    api_runner="run_api_tests.sh"
-  elif [[ -f "$REPO_DIR/run_api_tests.bat" ]] && command -v cmd.exe >/dev/null 2>&1; then
-    local win_repo
-    win_repo="$(cd "$REPO_DIR" && pwd -W 2>/dev/null || echo "$REPO_DIR")"
-    set +e
-    cmd.exe /c "cd /d \"${win_repo}\" && run_api_tests.bat" >"$API_TEST_LOG" 2>&1
-    API_TEST_EXIT=$?
-    set -e
-    api_runner="run_api_tests.bat"
-  elif [[ -f "$REPO_DIR/API_tests/pom.xml" ]] && command -v mvn >/dev/null 2>&1; then
-    set +e
-    (cd "$REPO_DIR/API_tests" && mvn -q -DfailIfNoTests=true test) >"$API_TEST_LOG" 2>&1
-    API_TEST_EXIT=$?
-    set -e
-    api_runner="maven-api-tests"
-  else
-    set +e
-    python -m pytest "$REPO_DIR/API_tests" -q --maxfail=1 --disable-warnings >"$API_TEST_LOG" 2>&1
-    API_TEST_EXIT=$?
-    set -e
-    api_runner="pytest-api-tests"
-  fi
+  local run_index=1
+  local min_api_cases_seen=999999
+  while [[ "$run_index" -le "$API_REPEAT" ]]; do
+    if [[ -f "$REPO_DIR/run_api_tests.sh" ]]; then
+      set +e
+      (cd "$REPO_DIR" && bash ./run_api_tests.sh) >"$API_TEST_LOG" 2>&1
+      API_TEST_EXIT=$?
+      set -e
+      api_runner="run_api_tests.sh"
+    elif [[ -f "$REPO_DIR/run_api_tests.bat" ]] && command -v cmd.exe >/dev/null 2>&1; then
+      local win_repo
+      win_repo="$(cd "$REPO_DIR" && pwd -W 2>/dev/null || echo "$REPO_DIR")"
+      set +e
+      cmd.exe /c "cd /d \"${win_repo}\" && run_api_tests.bat" >"$API_TEST_LOG" 2>&1
+      API_TEST_EXIT=$?
+      set -e
+      api_runner="run_api_tests.bat"
+    elif [[ -f "$REPO_DIR/API_tests/pom.xml" ]] && command -v mvn >/dev/null 2>&1; then
+      set +e
+      (cd "$REPO_DIR/API_tests" && mvn -q -DfailIfNoTests=true test) >"$API_TEST_LOG" 2>&1
+      API_TEST_EXIT=$?
+      set -e
+      api_runner="maven-api-tests"
+    else
+      set +e
+      python -m pytest "$REPO_DIR/API_tests" -q --maxfail=1 --disable-warnings >"$API_TEST_LOG" 2>&1
+      API_TEST_EXIT=$?
+      set -e
+      api_runner="pytest-api-tests"
+    fi
 
-  API_TEST_OUTPUT="$(cat "$API_TEST_LOG")"
+    API_TEST_OUTPUT="$(cat "$API_TEST_LOG")"
+
+    if [[ "$API_TEST_EXIT" -ne 0 ]]; then
+      rm -f "$API_TEST_LOG"
+      (cd "$REPO_DIR" && docker compose down >/dev/null 2>&1) || true
+      fail_check "API integration tests failed via ${api_runner} on run ${run_index}/${API_REPEAT}"
+      API_LOG_SNIPPET="$(echo "$API_TEST_OUTPUT" | tail -n 80)"
+      return
+    fi
+
+    local api_cases=""
+    if [[ "$api_runner" == "pytest-api-tests" ]]; then
+      api_cases="$(extract_pytest_passed_count "$API_TEST_OUTPUT")"
+    elif [[ "$api_runner" == "maven-api-tests" ]]; then
+      api_cases="$(sum_surefire_test_count "$REPO_DIR/API_tests/target/surefire-reports")"
+    else
+      api_cases="$(extract_pytest_passed_count "$API_TEST_OUTPUT")"
+    fi
+
+    if [[ -z "$api_cases" ]]; then
+      strict_or_warn "Unable to parse API test case count via ${api_runner} on run ${run_index}/${API_REPEAT}"
+    elif [[ "$api_cases" -lt "$MIN_API_TEST_CASES" ]]; then
+      fail_check "API test case count ${api_cases} < ${MIN_API_TEST_CASES} on run ${run_index}/${API_REPEAT}"
+    else
+      pass_check "API test case count ${api_cases} >= ${MIN_API_TEST_CASES} on run ${run_index}/${API_REPEAT}"
+    fi
+
+    if [[ -n "$api_cases" ]] && [[ "$api_cases" -lt "$min_api_cases_seen" ]]; then
+      min_api_cases_seen="$api_cases"
+    fi
+    pass_check "API integration tests passed via ${api_runner} on run ${run_index}/${API_REPEAT}"
+    run_index=$((run_index + 1))
+  done
+
   rm -f "$API_TEST_LOG"
-
   (cd "$REPO_DIR" && docker compose down >/dev/null 2>&1) || true
-
-  if [[ "$API_TEST_EXIT" -ne 0 ]]; then
-    fail_check "API integration tests failed via ${api_runner}"
-    API_LOG_SNIPPET="$(echo "$API_TEST_OUTPUT" | tail -n 80)"
-    return
-  fi
-
-  pass_check "API integration tests passed via ${api_runner}"
+  pass_check "API integration tests are stable across ${API_REPEAT} runs (min cases=${min_api_cases_seen})"
 }
 
 # Persist markdown report to disk.
@@ -454,6 +619,11 @@ write_report() {
     echo "- Repo: \`$REPO_DIR\`"
     echo "- Generated At (UTC): \`$now\`"
     echo "- Strict Mode: \`$STRICT_MODE\`"
+    echo "- Fail On Warn: \`$FAIL_ON_WARN\`"
+    echo "- Unit Repeat: \`$UNIT_REPEAT\`"
+    echo "- API Repeat: \`$API_REPEAT\`"
+    echo "- Unit Thresholds: files>=${MIN_UNIT_TEST_FILES}, cases>=${MIN_UNIT_TEST_CASES}, coverage>=${MIN_UNIT_COVERAGE}%"
+    echo "- API Thresholds: files>=${MIN_API_TEST_FILES}, cases>=${MIN_API_TEST_CASES}"
     echo "- Result: PASS=$PASS_COUNT, WARN=$WARN_COUNT, FAIL=$FAIL_COUNT"
     echo
     echo "## Checks"
@@ -502,6 +672,7 @@ main() {
 
   check_test_script_hardening
   count_test_files
+  check_test_dimension_coverage
   run_unit_tests_with_coverage
   run_api_tests
   write_report
@@ -510,6 +681,10 @@ main() {
   echo "Report: $REPORT_FILE"
 
   if [[ "$FAIL_COUNT" -gt 0 ]]; then
+    exit 1
+  fi
+  if [[ "$FAIL_ON_WARN" == "true" ]] && [[ "$WARN_COUNT" -gt 0 ]]; then
+    echo "Test gate failed because WARN exists and --fail-on-warn=true" >&2
     exit 1
   fi
   exit 0

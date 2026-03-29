@@ -1,9 +1,35 @@
 ﻿---
 name: delivery-packager
 description: "Prompt2Repo Phase 4: 交付物目录规范化、清理缓存文件、生成 metadata.json、运行 validate_package.py 验证"
+argument-hint: [--task-id]
+user-invocable: false
+allowed-tools: []
 ---
 
 # Delivery Packager — Prompt2Repo Phase 4
+
+## Superpower Loop Integration
+
+本 Skill 在 Prompt2Repo 主流程 Ralph-Loop 内运行，**禁止**二次启动 `setup-superpower-loop.sh`。
+
+**CRITICAL**: 输出 `<promise>PACKAGE_COMPLETE</promise>` 时必须遵守：
+- `TASK-{ID}/` 目录结构符合规范
+- `validate_package.py` 验证通过（如可用）
+- 所有排除项已清理
+- 最终检查清单全部通过
+
+**ABSOLUTE LAST OUTPUT RULE**: Promise 标签必须是回复的**最后一行**，后面不得有任何内容。
+
+## Background Knowledge
+
+**核心概念**: 交付打包是“从开发环境到可提交产物”的转化过程，必须确保交付包干净、完整、可复现。
+
+- **MANDATORY**: 排除所有环境依赖（node_modules/.venv 等）
+- **MANDATORY**: 排除所有运行缓存（.opencode/.codex/.vscode 等）
+- **MANDATORY**: 排除数据库文件（使用初始化脚本代替）
+- **MANDATORY**: metadata.json 必须包含正确的 project_type 和技术栈信息
+- **PROHIBITED**: 不得将 AI 轨迹转换脚本打包到产物中
+- **PROHIBITED**: 不得将自测报告打包到产物中
 
 ## 概述
 
@@ -193,12 +219,94 @@ python validate_package.py TASK-{ID}/ --repair
 - [ ] `TASK-{ID}/prompt.md` 是原始 Prompt（可修改版）
 - [ ] `TASK-{ID}/questions.md` 存在
 - [ ] `TASK-{ID}/sessions/` 目录存在
+
+### Step 5: 复制 prompt.md
+
+将原始 `prompt.md` 复制到 `TASK-{ID}/prompt.md`。
+
+### Step 6: 处理 questions.md
+
+将 `questions.md` 复制到 `TASK-{ID}/questions.md`。
+
+如果 `questions.md` 不存在，创建模板：
+
+```markdown
+# Questions & Issues
+
+## AI 生产过程中发现的问题
+
+### 问题 1
+- 描述: {...}
+- 影响: {...}
+- 处理方式: {...}
+
+（如无问题，请说明"本次生产过程未发现显著问题"）
+```
+
+### Step 7: 创建 sessions/ 目录并生成 trajectory.json
+
+创建 `TASK-{ID}/sessions/` 目录。
+
+**自动生成 trajectory.json**（如工具可用）：
+
+1. 检查 `script/merge_claude_subagents_trajectory.py` 是否存在
+2. 如果存在，执行：
+   ```bash
+   python script/merge_claude_subagents_trajectory.py --output TASK-{ID}/sessions/trajectory.json
+   ```
+3. 如果不存在，检查 `script/convert_ai_session.py`：
+   ```bash
+   python script/convert_ai_session.py --output TASK-{ID}/sessions/trajectory.json
+   ```
+4. 如果两个脚本都不可用，记录到 `questions.md`：
+   ```
+   ### trajectory.json 未自动生成
+   - **问题**: 未找到 merge_claude_subagents_trajectory.py 或 convert_ai_session.py
+   - **影响**: sessions/ 目录为空，需手动生成 trajectory.json
+   - **解决方式**: 做题完成后通过外部工具生成并放入 sessions/ 目录
+   ```
+
+> **注意**：trajectory.json 的生成依赖完整的 Claude Code 会话记录。如果在流水线执行期间脚本不可用或会话记录不完整，本阶段仅创建空目录并记录问题。
+
+### Step 8: 清理和验证
+
+1. **检查语言一致性**：
+   - 如 Prompt 是英文，检查 repo/ 中的注释、日志、UI 是否全部英文
+   - 发现中文则标记为问题
+
+2. **检查敏感信息**：
+   - 扫描代码中是否有硬编码的 API Key / Token / 密码
+   - 检查 `.env` 文件是否应加入 `.gitignore`
+
+3. **运行 validate_package.py**（如可用）：
+
+```bash
+python validate_package.py TASK-{ID}/
+```
+
+如发现问题，自动执行：
+```bash
+python validate_package.py TASK-{ID}/ --repair
+```
+
+### Step 9: 最终检查清单
+
+逐条确认：
+
+- [ ] `TASK-{ID}/repo/` 不包含 `node_modules` / `.venv` 等环境依赖
+- [ ] `TASK-{ID}/repo/` 不包含 `.opencode` / `.codex` / `.vscode` 等缓存
+- [ ] `TASK-{ID}/repo/` 不包含数据库文件
+- [ ] `TASK-{ID}/repo/README.md` 包含启动和测试说明
+- [ ] `TASK-{ID}/metadata.json` 存在且字段正确
+- [ ] `TASK-{ID}/prompt.md` 是原始 Prompt（可修改版）
+- [ ] `TASK-{ID}/questions.md` 存在
+- [ ] `TASK-{ID}/sessions/` 目录存在
 - [ ] `TASK-{ID}/docs/` 包含设计文档
 - [ ] 不包含 AI 轨迹转换脚本
 - [ ] 英文 Prompt 的产物无中文字符
 - [ ] 自测报告不打包到产物中
 
-## 完成条件
+## Exit Criteria
 
 当以下全部满足时，Phase 4 完成：
 - `TASK-{ID}/` 目录结构符合规范
@@ -206,5 +314,10 @@ python validate_package.py TASK-{ID}/ --repair
 - 所有排除项已清理
 - 最终检查清单全部通过
 
-输出 `<promise>PACKAGE_COMPLETE</promise>` 标记完成，且该标签必须是回复最后一行（后面不得有任何内容）。
+输出 `<promise>PACKAGE_COMPLETE</promise>` 标记完成，且该标签必须是回复最后一行。
 
+## References
+
+- `../doc-updater/SKILL.md` - 文档更新子代理
+- `../../skills/references/completion-promises.md` - Promise 设计规范
+- `./scripts/validate_package.py` - 交付包验证脚本

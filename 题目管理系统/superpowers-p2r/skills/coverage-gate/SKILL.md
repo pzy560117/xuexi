@@ -1,6 +1,6 @@
 ﻿---
 name: coverage-gate
-description: "Prompt2Repo Phase 3.8: 覆盖率门禁。执行 verify + 覆盖率阈值校验（默认 line>=70%, branch>=50%）。"
+description: "Prompt2Repo Phase 3.8: 覆盖率门禁。执行覆盖率阈值校验（默认 line>=80%, branch>=70%，支持 Python/Maven）。"
 ---
 
 # Coverage Gate — Prompt2Repo Phase 3.8
@@ -21,8 +21,9 @@ description: "Prompt2Repo Phase 3.8: 覆盖率门禁。执行 verify + 覆盖率
   --repo-dir "." \
   --report-file ".tmp/coverage-gate-report.md" \
   --strict true \
-  --min-line-coverage 70 \
-  --min-branch-coverage 50
+  --fail-on-warn true \
+  --min-line-coverage 80 \
+  --min-branch-coverage 70
 ```
 
 ### Step 2: 修复并复验
@@ -31,12 +32,12 @@ description: "Prompt2Repo Phase 3.8: 覆盖率门禁。执行 verify + 覆盖率
 
 1. 增补测试并修复失败用例。
 2. 重新执行 Step 1。
-3. 最多 3 轮。
+3. 最多 5 轮。
 
 ## 完成条件
 
 - `.tmp/coverage-gate-report.md` 已生成
-- 报告中 `FAIL=0`
+- 报告中 `FAIL=0` 且 `WARN=0`
 
 输出 `<promise>COVERAGE_COMPLETE</promise>`，且该标签必须是回复最后一行。
 

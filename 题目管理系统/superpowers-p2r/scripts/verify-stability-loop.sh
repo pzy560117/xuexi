@@ -9,11 +9,13 @@ set -euo pipefail
 parse_args() {
   REPO_DIR="$PWD"
   REPORT_FILE=".tmp/stability-loop-report.md"
-  ITERATIONS=3
+  ITERATIONS=5
   STRICT_MODE="true"
+  FAIL_ON_WARN="true"
   API_WAIT_SECONDS=180
   HEALTHCHECK_URL=""
-  STOP_ON_FIRST_FAIL="true"
+  STOP_ON_FIRST_FAIL="false"
+  MIN_PASS_RATE=100
   local script_dir
   script_dir="$(cd "$(dirname "$0")" && pwd)"
   RUNTIME_SCRIPT="${CLAUDE_PLUGIN_ROOT:-$script_dir}/scripts/verify-runtime-smoke.sh"
@@ -39,6 +41,10 @@ parse_args() {
         STRICT_MODE="$2"
         shift 2
         ;;
+      --fail-on-warn)
+        FAIL_ON_WARN="$2"
+        shift 2
+        ;;
       --api-wait-seconds)
         API_WAIT_SECONDS="$2"
         shift 2
@@ -55,6 +61,10 @@ parse_args() {
         RUNTIME_SCRIPT="$2"
         shift 2
         ;;
+      --min-pass-rate)
+        MIN_PASS_RATE="$2"
+        shift 2
+        ;;
       -h|--help)
         cat <<'HELP'
 Usage: verify-stability-loop.sh [options]
@@ -62,12 +72,14 @@ Usage: verify-stability-loop.sh [options]
 Options:
   --repo-dir <path>            Project root (default: current directory)
   --report-file <path>         Report path (default: .tmp/stability-loop-report.md)
-  --iterations <n>             Number of runtime cycles (default: 3)
+  --iterations <n>             Number of runtime cycles (default: 5)
   --strict <true|false>        Strict mode for runtime checks (default: true)
+  --fail-on-warn <true|false>  Treat WARN as gate failure (default: true)
   --api-wait-seconds <n>       Runtime health wait timeout (default: 180)
   --healthcheck-url <url>      Preferred runtime health endpoint (optional)
-  --stop-on-first-fail <bool>  Stop loop immediately on first fail (default: true)
+  --stop-on-first-fail <bool>  Stop loop immediately on first fail (default: false)
   --runtime-script <path>      Path to verify-runtime-smoke.sh
+  --min-pass-rate <n>          Required pass rate percentage (default: 100)
 HELP
         exit 0
         ;;
@@ -83,8 +95,12 @@ HELP
   [[ "$ITERATIONS" =~ ^[0-9]+$ ]] || { echo "--iterations must be number" >&2; return 1; }
   [[ "$ITERATIONS" -gt 0 ]] || { echo "--iterations must be > 0" >&2; return 1; }
   [[ "$STRICT_MODE" =~ ^(true|false)$ ]] || { echo "--strict must be true|false" >&2; return 1; }
+  [[ "$FAIL_ON_WARN" =~ ^(true|false)$ ]] || { echo "--fail-on-warn must be true|false" >&2; return 1; }
   [[ "$STOP_ON_FIRST_FAIL" =~ ^(true|false)$ ]] || { echo "--stop-on-first-fail must be true|false" >&2; return 1; }
   [[ "$API_WAIT_SECONDS" =~ ^[0-9]+$ ]] || { echo "--api-wait-seconds must be number" >&2; return 1; }
+  [[ "$MIN_PASS_RATE" =~ ^[0-9]+$ ]] || { echo "--min-pass-rate must be number" >&2; return 1; }
+  [[ "$MIN_PASS_RATE" -ge 1 ]] || { echo "--min-pass-rate must be >= 1" >&2; return 1; }
+  [[ "$MIN_PASS_RATE" -le 100 ]] || { echo "--min-pass-rate must be <= 100" >&2; return 1; }
 }
 
 # Append markdown line into report buffer.
@@ -118,7 +134,14 @@ run_iteration() {
   local iter_log
   iter_log="$(mktemp)"
 
-  local cmd=("$RUNTIME_SCRIPT" "--repo-dir" "$REPO_DIR" "--report-file" "$iter_report" "--strict" "$STRICT_MODE" "--api-wait-seconds" "$API_WAIT_SECONDS")
+  local cmd=(
+    "$RUNTIME_SCRIPT"
+    "--repo-dir" "$REPO_DIR"
+    "--report-file" "$iter_report"
+    "--strict" "$STRICT_MODE"
+    "--fail-on-warn" "true"
+    "--api-wait-seconds" "$API_WAIT_SECONDS"
+  )
   if [[ -n "$HEALTHCHECK_URL" ]]; then
     cmd+=("--healthcheck-url" "$HEALTHCHECK_URL")
   fi
@@ -132,6 +155,7 @@ run_iteration() {
 
   if [[ "$iter_exit" -eq 0 ]]; then
     pass_check "Iteration ${iter} runtime smoke passed"
+    ITERATION_PASS_COUNT=$((ITERATION_PASS_COUNT + 1))
   else
     fail_check "Iteration ${iter} runtime smoke failed"
     local iter_log_tail
@@ -160,6 +184,9 @@ write_report() {
     echo "- Generated At (UTC): \`$now\`"
     echo "- Iterations: \`$ITERATIONS\`"
     echo "- Strict Mode: \`$STRICT_MODE\`"
+    echo "- Fail On Warn: \`$FAIL_ON_WARN\`"
+    echo "- Min Pass Rate: \`${MIN_PASS_RATE}%\`"
+    echo "- Iteration Pass Count: \`${ITERATION_PASS_COUNT}/${ITERATIONS}\`"
     echo "- Result: PASS=$PASS_COUNT, WARN=$WARN_COUNT, FAIL=$FAIL_COUNT"
     echo
     echo "## Checks"
@@ -188,6 +215,7 @@ main() {
   REPORT_LINES=""
   ITERATION_RESULTS=""
   FAILED_ITERATION_SNIPPETS=""
+  ITERATION_PASS_COUNT=0
 
   parse_args "$@" || exit 2
 
@@ -204,8 +232,15 @@ main() {
     i=$((i + 1))
   done
 
-  if [[ "$FAIL_COUNT" -eq 0 ]]; then
+  local pass_rate
+  pass_rate="$(awk -v p="$ITERATION_PASS_COUNT" -v t="$ITERATIONS" 'BEGIN { if (t==0) print 0; else printf("%d", (p/t)*100) }')"
+
+  if [[ "$ITERATION_PASS_COUNT" -eq "$ITERATIONS" ]]; then
     pass_check "All stability iterations passed (${ITERATIONS}/${ITERATIONS})"
+  elif [[ "$pass_rate" -ge "$MIN_PASS_RATE" ]]; then
+    pass_check "Stability pass rate ${pass_rate}% >= ${MIN_PASS_RATE}% (${ITERATION_PASS_COUNT}/${ITERATIONS})"
+  else
+    fail_check "Stability pass rate ${pass_rate}% < ${MIN_PASS_RATE}% (${ITERATION_PASS_COUNT}/${ITERATIONS})"
   fi
 
   write_report
@@ -214,6 +249,10 @@ main() {
   echo "Report: $REPORT_FILE"
 
   if [[ "$FAIL_COUNT" -gt 0 ]]; then
+    exit 1
+  fi
+  if [[ "$FAIL_ON_WARN" == "true" ]] && [[ "$WARN_COUNT" -gt 0 ]]; then
+    echo "Stability loop failed because WARN exists and --fail-on-warn=true" >&2
     exit 1
   fi
   exit 0

@@ -11,9 +11,12 @@ parse_args() {
   REPO_DIR="$PWD"
   REPORT_FILE=".tmp/runtime-smoke-report.md"
   STRICT_MODE="true"
+  FAIL_ON_WARN="true"
   API_WAIT_SECONDS=180
   HEALTHCHECK_URL=""
   SKIP_BUILD="false"
+  API_REPEAT=2
+  SMOKE_PATHS="/health,/api/v1/system/health"
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -29,6 +32,10 @@ parse_args() {
         STRICT_MODE="$2"
         shift 2
         ;;
+      --fail-on-warn)
+        FAIL_ON_WARN="$2"
+        shift 2
+        ;;
       --api-wait-seconds)
         API_WAIT_SECONDS="$2"
         shift 2
@@ -41,6 +48,14 @@ parse_args() {
         SKIP_BUILD="$2"
         shift 2
         ;;
+      --api-repeat)
+        API_REPEAT="$2"
+        shift 2
+        ;;
+      --smoke-paths)
+        SMOKE_PATHS="$2"
+        shift 2
+        ;;
       -h|--help)
         cat <<'HELP'
 Usage: verify-runtime-smoke.sh [options]
@@ -49,9 +64,12 @@ Options:
   --repo-dir <path>          Project root (default: current directory)
   --report-file <path>       Report path (default: .tmp/runtime-smoke-report.md)
   --strict <true|false>      Fail on environment capability gaps (default: true)
+  --fail-on-warn <true|false> Treat WARN as gate failure (default: true)
   --api-wait-seconds <n>     Max wait seconds for health endpoint (default: 180)
   --healthcheck-url <url>    Preferred health endpoint (optional)
   --skip-build <true|false>  Use 'docker compose up -d' without build (default: false)
+  --api-repeat <n>           Repeat API smoke runner for flaky detection (default: 2)
+  --smoke-paths <csv>        Extra HTTP smoke paths (default: /health,/api/v1/system/health)
 HELP
         exit 0
         ;;
@@ -64,8 +82,11 @@ HELP
 
   [[ -d "$REPO_DIR" ]] || { echo "Repo directory not found: $REPO_DIR" >&2; return 1; }
   [[ "$STRICT_MODE" =~ ^(true|false)$ ]] || { echo "--strict must be true|false" >&2; return 1; }
+  [[ "$FAIL_ON_WARN" =~ ^(true|false)$ ]] || { echo "--fail-on-warn must be true|false" >&2; return 1; }
   [[ "$SKIP_BUILD" =~ ^(true|false)$ ]] || { echo "--skip-build must be true|false" >&2; return 1; }
   [[ "$API_WAIT_SECONDS" =~ ^[0-9]+$ ]] || { echo "--api-wait-seconds must be number" >&2; return 1; }
+  [[ "$API_REPEAT" =~ ^[0-9]+$ ]] || { echo "--api-repeat must be number" >&2; return 1; }
+  [[ "$API_REPEAT" -gt 0 ]] || { echo "--api-repeat must be > 0" >&2; return 1; }
 }
 
 # Append markdown line into report buffer.
@@ -99,6 +120,39 @@ strict_or_warn() {
   else
     warn_check "$msg"
   fi
+}
+
+# Extract pytest passed test-case count from output.
+extract_pytest_passed_count() {
+  local output="$1"
+  local count
+  count="$(printf '%s\n' "$output" | perl -ne 'if (/([0-9]+)\s+passed\b/) { $v=$1 } END { print $v if defined $v }' 2>/dev/null || true)"
+  echo "$count"
+}
+
+# Probe a URL using available client tools.
+probe_url() {
+  local url="$1"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsS "$url" >/dev/null 2>&1
+    return $?
+  fi
+  if command -v wget >/dev/null 2>&1; then
+    wget -q -O /dev/null "$url" >/dev/null 2>&1
+    return $?
+  fi
+  if command -v python >/dev/null 2>&1; then
+    python - <<PY >/dev/null 2>&1
+import sys, urllib.request
+try:
+    urllib.request.urlopen("${url}", timeout=5)
+    sys.exit(0)
+except Exception:
+    sys.exit(1)
+PY
+    return $?
+  fi
+  return 2
 }
 
 # Build candidate health endpoints based on common backend conventions.
@@ -155,50 +209,99 @@ PY
 run_api_tests() {
   local api_log
   api_log="$(mktemp)"
-  local test_exit=1
+  local run_index=1
+  local min_cases_seen=999999
+  while [[ "$run_index" -le "$API_REPEAT" ]]; do
+    local test_exit=1
 
-  if [[ -f "$REPO_DIR/run_api_tests.sh" ]]; then
-    set +e
-    (cd "$REPO_DIR" && bash ./run_api_tests.sh) >"$api_log" 2>&1
-    test_exit=$?
-    set -e
-    API_RUNNER="run_api_tests.sh"
-  elif [[ -f "$REPO_DIR/run_api_tests.bat" ]] && command -v cmd.exe >/dev/null 2>&1; then
-    local win_repo
-    win_repo="$(cd "$REPO_DIR" && pwd -W 2>/dev/null || echo "$REPO_DIR")"
-    set +e
-    cmd.exe /c "cd /d \"${win_repo}\" && run_api_tests.bat" >"$api_log" 2>&1
-    test_exit=$?
-    set -e
-    API_RUNNER="run_api_tests.bat"
-  elif [[ -f "$REPO_DIR/API_tests/pom.xml" ]] && command -v mvn >/dev/null 2>&1; then
-    set +e
-    (cd "$REPO_DIR/API_tests" && mvn -q -DfailIfNoTests=true test) >"$api_log" 2>&1
-    test_exit=$?
-    set -e
-    API_RUNNER="maven-api-tests"
-  elif [[ -d "$REPO_DIR/API_tests" ]] && command -v python >/dev/null 2>&1 && python -m pytest --help >/dev/null 2>&1; then
-    set +e
-    python -m pytest "$REPO_DIR/API_tests" -q --maxfail=1 --disable-warnings >"$api_log" 2>&1
-    test_exit=$?
-    set -e
-    API_RUNNER="pytest-api-tests"
-  else
-    rm -f "$api_log"
-    strict_or_warn "No executable API test runner found (run_api_tests.sh/.bat, API_tests/pom.xml, or pytest API_tests)"
-    return
-  fi
+    if [[ -f "$REPO_DIR/run_api_tests.sh" ]]; then
+      set +e
+      (cd "$REPO_DIR" && bash ./run_api_tests.sh) >"$api_log" 2>&1
+      test_exit=$?
+      set -e
+      API_RUNNER="run_api_tests.sh"
+    elif [[ -f "$REPO_DIR/run_api_tests.bat" ]] && command -v cmd.exe >/dev/null 2>&1; then
+      local win_repo
+      win_repo="$(cd "$REPO_DIR" && pwd -W 2>/dev/null || echo "$REPO_DIR")"
+      set +e
+      cmd.exe /c "cd /d \"${win_repo}\" && run_api_tests.bat" >"$api_log" 2>&1
+      test_exit=$?
+      set -e
+      API_RUNNER="run_api_tests.bat"
+    elif [[ -f "$REPO_DIR/API_tests/pom.xml" ]] && command -v mvn >/dev/null 2>&1; then
+      set +e
+      (cd "$REPO_DIR/API_tests" && mvn -q -DfailIfNoTests=true test) >"$api_log" 2>&1
+      test_exit=$?
+      set -e
+      API_RUNNER="maven-api-tests"
+    elif [[ -d "$REPO_DIR/API_tests" ]] && command -v python >/dev/null 2>&1 && python -m pytest --help >/dev/null 2>&1; then
+      set +e
+      python -m pytest "$REPO_DIR/API_tests" -q --maxfail=1 --disable-warnings >"$api_log" 2>&1
+      test_exit=$?
+      set -e
+      API_RUNNER="pytest-api-tests"
+    else
+      rm -f "$api_log"
+      strict_or_warn "No executable API test runner found (run_api_tests.sh/.bat, API_tests/pom.xml, or pytest API_tests)"
+      return
+    fi
 
-  API_TEST_OUTPUT="$(cat "$api_log")"
+    API_TEST_OUTPUT="$(cat "$api_log")"
+
+    if [[ "$test_exit" -ne 0 ]]; then
+      rm -f "$api_log"
+      fail_check "API smoke tests failed via ${API_RUNNER} on run ${run_index}/${API_REPEAT}"
+      API_LOG_SNIPPET="$(echo "$API_TEST_OUTPUT" | tail -n 120)"
+      return
+    fi
+
+    local case_count
+    case_count="$(extract_pytest_passed_count "$API_TEST_OUTPUT")"
+    if [[ -n "$case_count" ]] && [[ "$case_count" -lt "$min_cases_seen" ]]; then
+      min_cases_seen="$case_count"
+    fi
+
+    pass_check "API smoke tests passed via ${API_RUNNER} on run ${run_index}/${API_REPEAT}"
+    run_index=$((run_index + 1))
+  done
   rm -f "$api_log"
 
-  if [[ "$test_exit" -ne 0 ]]; then
-    fail_check "API smoke tests failed via ${API_RUNNER}"
-    API_LOG_SNIPPET="$(echo "$API_TEST_OUTPUT" | tail -n 120)"
+  if [[ "$min_cases_seen" -lt 999999 ]]; then
+    pass_check "API smoke tests are stable across ${API_REPEAT} runs (min passed=${min_cases_seen})"
+  else
+    warn_check "API smoke case count could not be parsed; stability assessed by runner exit codes only"
+  fi
+}
+
+# Probe additional smoke endpoints after primary healthcheck is up.
+run_additional_endpoint_checks() {
+  if [[ -z "${USED_HEALTH_URL:-}" ]]; then
+    strict_or_warn "Cannot run extra endpoint checks: health URL unresolved"
     return
   fi
 
-  pass_check "API smoke tests passed via ${API_RUNNER}"
+  local base_url
+  base_url="$(printf '%s\n' "$USED_HEALTH_URL" | sed -E 's#(https?://[^/]+).*#\1#')"
+  if [[ -z "$base_url" ]]; then
+    strict_or_warn "Cannot derive base URL from health endpoint: ${USED_HEALTH_URL}"
+    return
+  fi
+
+  IFS=',' read -r -a smoke_paths <<< "$SMOKE_PATHS"
+  local path=""
+  for path in "${smoke_paths[@]}"; do
+    path="$(printf '%s' "$path" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    [[ -n "$path" ]] || continue
+    if [[ "$path" != /* ]]; then
+      path="/$path"
+    fi
+    local url="${base_url}${path}"
+    if probe_url "$url"; then
+      pass_check "Smoke endpoint check passed: ${url}"
+    else
+      fail_check "Smoke endpoint check failed: ${url}"
+    fi
+  done
 }
 
 # Persist markdown report to disk.
@@ -213,6 +316,9 @@ write_report() {
     echo "- Repo: \`$REPO_DIR\`"
     echo "- Generated At (UTC): \`$now\`"
     echo "- Strict Mode: \`$STRICT_MODE\`"
+    echo "- Fail On Warn: \`$FAIL_ON_WARN\`"
+    echo "- API Repeat: \`$API_REPEAT\`"
+    echo "- Extra Smoke Paths: \`$SMOKE_PATHS\`"
     echo "- Result: PASS=$PASS_COUNT, WARN=$WARN_COUNT, FAIL=$FAIL_COUNT"
     echo
     echo "## Checks"
@@ -298,6 +404,24 @@ run_runtime_smoke() {
     set -e
   fi
 
+  # Detect unhealthy/exited services before running deeper checks.
+  if [[ "$FAIL_COUNT" -eq 0 ]]; then
+    set +e
+    local compose_ps
+    compose_ps="$(cd "$REPO_DIR" && docker compose ps 2>&1)"
+    set -e
+    if printf '%s\n' "$compose_ps" | grep -Eiq 'unhealthy|exited|dead'; then
+      fail_check "docker compose ps indicates unhealthy/exited services"
+      COMPOSE_APP_LOG="$compose_ps"
+    else
+      pass_check "docker compose services are healthy/running"
+    fi
+  fi
+
+  if [[ "$FAIL_COUNT" -eq 0 ]]; then
+    run_additional_endpoint_checks
+  fi
+
   if [[ "$FAIL_COUNT" -eq 0 ]]; then
     run_api_tests
   fi
@@ -337,6 +461,10 @@ main() {
   echo "Report: $REPORT_FILE"
 
   if [[ "$FAIL_COUNT" -gt 0 ]]; then
+    exit 1
+  fi
+  if [[ "$FAIL_ON_WARN" == "true" ]] && [[ "$WARN_COUNT" -gt 0 ]]; then
+    echo "Runtime smoke failed because WARN exists and --fail-on-warn=true" >&2
     exit 1
   fi
   exit 0

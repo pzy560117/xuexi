@@ -1,4 +1,4 @@
----
+﻿---
 name: delivery-checker
 description: "Prompt2Repo Phase 4.5: 对 TASK 交付包执行自动化验收，输出统一检查报告并作为最终结束门禁"
 ---
@@ -29,7 +29,7 @@ TASK-{ID}/
 
 如果未传 `--task-id`，自动选择当前工作区最新的 `TASK-*` 目录。
 
-### Step 2: 运行严格测试门禁（先测后验）
+### Step 2: 运行多重质量门禁（先测后验）
 
 先在交付包内 `repo/` 执行：
 
@@ -42,9 +42,33 @@ TASK-{ID}/
   --min-unit-coverage 70 \
   --run-api-tests auto \
   --strict true
+
+"${CLAUDE_PLUGIN_ROOT}/scripts/verify-runtime-smoke.sh" \
+  --repo-dir TASK-{ID}/repo \
+  --report-file TASK-{ID}/docs/runtime-smoke-report.md \
+  --strict true
+
+"${CLAUDE_PLUGIN_ROOT}/scripts/verify-stability-loop.sh" \
+  --repo-dir TASK-{ID}/repo \
+  --report-file TASK-{ID}/docs/stability-loop-report.md \
+  --iterations 3 \
+  --strict true
+
+"${CLAUDE_PLUGIN_ROOT}/scripts/verify-coverage-gate.sh" \
+  --repo-dir TASK-{ID}/repo \
+  --report-file TASK-{ID}/docs/coverage-gate-report.md \
+  --strict true \
+  --min-line-coverage 70 \
+  --min-branch-coverage 50
+
+"${CLAUDE_PLUGIN_ROOT}/scripts/verify-github-policy-gate.sh" \
+  --repo-dir TASK-{ID}/repo \
+  --report-file TASK-{ID}/docs/policy-gate-report.md \
+  --strict false \
+  --required-checks "test-gate,runtime-smoke,stability-loop,coverage-gate,delivery-check"
 ```
 
-若测试门禁失败，先修复后再继续后续验收。
+若任一门禁失败，先修复后再继续后续验收。
 
 ### Step 3: 运行自动验收脚本
 
@@ -80,8 +104,9 @@ TASK-{ID}/
 - `TASK-{ID}/delivery-check-report.md` 已生成
 - 无 FAIL 级阻塞项
 
-输出 `DELIVERY_COMPLETE` 标记完成整个流水线。
+输出 `<promise>DELIVERY_COMPLETE</promise>` 标记完成整个流水线，且该标签必须是回复最后一行。
 
 ## 跳过条件
 
-当传入 `--skip-delivery-check` 参数时，跳过本 Phase，直接输出最终完成信号。
+当传入 `--skip-delivery-check` 参数时，跳过本 Phase，直接输出 `<promise>DELIVERY_COMPLETE</promise>`（最后一行）。
+

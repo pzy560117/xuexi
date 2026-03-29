@@ -1,4 +1,4 @@
----
+﻿---
 name: idea2repo
 description: "Idea2Repo 一键入口: 从模糊的 idea 出发，自动经过头脑风暴(Brainstorming)、计划连贯编写与执行，直达完整交付包。适合没有完整 prompt.md 的场景。"
 ---
@@ -9,13 +9,13 @@ description: "Idea2Repo 一键入口: 从模糊的 idea 出发，自动经过头
 1. **绝对拦截，禁止跨阶段越权**：
    无论用户给出的 `<idea>` 有多详细，你都**绝对禁止**在 Phase 2 (Executing Plans) 被正式激活前，使用任何工具（如 `mkdir`, `Write`, `Bash` 等）创建具体的业务代码文件。所有的设想要先落地为设计文档。
 2. **主动管理阶段状态 (State Advancement Duty) ★ 绝对不可省略**：
-   Loop 脚本无法自动猜测进度！当你准备结束当前阶段（即：准备输出诸如 `BRAINSTORMING_COMPLETE` 的信号词）时，你**必须**先使用文件写入工具（Write/Replace）主动修改 `.claude/superpower-loop.local.md` 文件：
+   Loop 脚本无法自动猜测进度！当你准备结束当前阶段（即：准备输出诸如 `<promise>BRAINSTORMING_COMPLETE</promise>` 的完成标签）时，你**必须**先使用文件写入工具（Write/Replace）主动修改 `.claude/superpower-loop.local.md` 文件：
    (1) 将当前 Phase 的 `status` 字段从 `in_progress` 改成 `done`。
    (2) 将链条上下一个非跳过的 Phase 的 `status` 置为 `in_progress`。
    (3) 更新属性 `current_phase` 为相应的索引。
    **只有当这三步保存成功后，你才能继续执行最后一步（输出完成信号）！**
 3. **单步挂起原则 (Yield Control)**：
-   一次对话回合**只能执行当前一个 Phase 的任务**。当你完成当前阶段的内容并按上述规则更新了状态文件后，你必须且只能输出对应的完成信号，然后**强制立刻停止 (STOP)**，绝不允许在同一回合继续拉起下一个阶段的动作。
+   一次对话回合**只能执行当前一个 Phase 的任务**。当你完成当前阶段的内容并按上述规则更新了状态文件后，你必须且只能输出对应的完成信号，然后**强制立刻停止 (STOP)**，绝不允许在同一回合继续拉起下一个阶段的动作；承诺标签必须作为最后一行输出。
 4. **强制从 Phase 0 起步**：
    任何通过 `idea2repo` 进来的任务，第一步只能是产出文档到 `docs/designs/`。哪怕需求再完美，也必须走这个输出流程来固化设计，禁止为了图快而跳过脑暴或计划阶段。
 5. **严格 Skill 对齐 (Skill Lock)**：
@@ -43,6 +43,10 @@ description: "Idea2Repo 一键入口: 从模糊的 idea 出发，自动经过头
 | `--skip-checklist` |  ❌  | 跳过 Phase 3 领域检查清单           |
 | `--skip-review`    |  ❌  | 跳过 Phase 4 自测审查               |
 | `--skip-test-gate` |  ❌  | 跳过 Phase 4.5 严格测试门禁         |
+| `--skip-runtime-smoke` |  ❌  | 跳过 Phase 4.6 运行态冒烟门禁   |
+| `--skip-stability-loop` |  ❌  | 跳过 Phase 4.7 稳定性循环门禁  |
+| `--skip-coverage-gate` |  ❌  | 跳过 Phase 4.8 覆盖率门禁      |
+| `--skip-policy-gate` |  ❌  | 跳过 Phase 4.9 GitHub 策略门禁    |
 | `--skip-package`   |  ❌  | 跳过 Phase 5 交付打包               |
 | `--skip-delivery-check` |  ❌  | 跳过 Phase 6 自动交付验收       |
 
@@ -82,6 +86,22 @@ description: "Idea2Repo 一键入口: 从模糊的 idea 出发，自动经过头
 │  ├─ 严格测试门禁（覆盖率+API集成+fail-fast）              │
 │  ✓ TEST_GATE_COMPLETE                                    │
 │                                                          │
+│  Phase 4.6: Runtime Smoke ★ 质量门禁 (可选)              │
+│  ├─ docker 启动 + 健康检查 + API 冒烟                     │
+│  ✓ RUNTIME_SMOKE_COMPLETE                                │
+│                                                          │
+│  Phase 4.7: Stability Loop ★ 质量门禁 (可选)             │
+│  ├─ Runtime Smoke 多轮循环                                │
+│  ✓ STABILITY_COMPLETE                                    │
+│                                                          │
+│  Phase 4.8: Coverage Gate ★ 质量门禁 (可选)              │
+│  ├─ 覆盖率阈值校验                                        │
+│  ✓ COVERAGE_COMPLETE                                     │
+│                                                          │
+│  Phase 4.9: Policy Gate ★ 质量门禁 (可选)                │
+│  ├─ workflow/分支保护策略检查                             │
+│  ✓ POLICY_COMPLETE                                       │
+│                                                          │
 │  Phase 5: Delivery Packager (打包交付)                    │
 │  ├─ 创建交付包并验证                                      │
 │  ✓ PACKAGE_COMPLETE                                      │
@@ -101,14 +121,14 @@ description: "Idea2Repo 一键入口: 从模糊的 idea 出发，自动经过头
 
 ```
 读取传入的 <idea> 参数，执行 brainstorming skill。
-等待 BRAINSTORMING_COMPLETE 信号。
+等待 `<promise>BRAINSTORMING_COMPLETE</promise>` 信号。
 ```
 
 ### 2. Phase 1
 
 ```
 执行 writing-plans skill，使用 docs/designs/ 作为输入。
-等待 PLANNING_COMPLETE 信号。
+等待 `<promise>PLANNING_COMPLETE</promise>` 信号。
 ```
 
 ### 3. Phase 2
@@ -116,7 +136,7 @@ description: "Idea2Repo 一键入口: 从模糊的 idea 出发，自动经过头
 ```
 执行 executing-plans skill，使用 docs/plans/ 作为输入。
 此阶段复用主 Ralph-Loop 执行，禁止二次启动 setup-superpower-loop.sh 覆盖主状态文件。
-等待 EXECUTION_COMPLETE 信号。
+等待 `<promise>EXECUTION_COMPLETE</promise>` 信号。
 ```
 
 ### 4. Phase 3（可跳过）★ 质量门禁
@@ -124,7 +144,7 @@ description: "Idea2Repo 一键入口: 从模糊的 idea 出发，自动经过头
 ```
 如未指定 --skip-checklist：
 执行 domain-checklist skill，生成并执行领域检查清单。
-等待 CHECKLIST_COMPLETE 信号。
+等待 `<promise>CHECKLIST_COMPLETE</promise>` 信号。
 ```
 
 ### 5. Phase 4（可跳过）
@@ -132,7 +152,7 @@ description: "Idea2Repo 一键入口: 从模糊的 idea 出发，自动经过头
 ```
 如未指定 --skip-review：
 执行 self-review skill。
-等待 SELF_REVIEW_COMPLETE 信号。
+等待 `<promise>SELF_REVIEW_COMPLETE</promise>` 信号。
 ```
 
 ### 6. Phase 4.5（可跳过）★ 质量门禁
@@ -140,23 +160,55 @@ description: "Idea2Repo 一键入口: 从模糊的 idea 出发，自动经过头
 ```
 如未指定 --skip-test-gate：
 执行 test-gate skill，运行严格测试门禁并生成报告。
-等待 TEST_GATE_COMPLETE 信号。
+等待 `<promise>TEST_GATE_COMPLETE</promise>` 信号。
 ```
 
-### 7. Phase 5（可跳过）
+### 7. Phase 4.6（可跳过）★ 质量门禁
+
+```
+如未指定 --skip-runtime-smoke：
+执行 runtime-smoke skill，运行运行态冒烟验证。
+等待 `<promise>RUNTIME_SMOKE_COMPLETE</promise>` 信号。
+```
+
+### 8. Phase 4.7（可跳过）★ 质量门禁
+
+```
+如未指定 --skip-stability-loop：
+执行 stability-loop skill，循环执行 runtime smoke。
+等待 `<promise>STABILITY_COMPLETE</promise>` 信号。
+```
+
+### 9. Phase 4.8（可跳过）★ 质量门禁
+
+```
+如未指定 --skip-coverage-gate：
+执行 coverage-gate skill，执行覆盖率阈值验证。
+等待 `<promise>COVERAGE_COMPLETE</promise>` 信号。
+```
+
+### 10. Phase 4.9（可跳过）★ 质量门禁
+
+```
+如未指定 --skip-policy-gate：
+执行 policy-gate skill，执行 CI/workflow/分支保护策略检查。
+等待 `<promise>POLICY_COMPLETE</promise>` 信号。
+```
+
+### 11. Phase 5（可跳过）
 
 ```
 如未指定 --skip-package：
 执行 delivery-packager skill，传入 --task-id 参数。
-等待 PACKAGE_COMPLETE 信号。
+等待 `<promise>PACKAGE_COMPLETE</promise>` 信号。
 ```
 
-### 8. Phase 6（可跳过）★ 质量门禁
+### 12. Phase 6（可跳过）★ 质量门禁
 
 ```
 如未指定 --skip-delivery-check：
 执行 delivery-checker skill，传入 --task-id 参数。
-等待 DELIVERY_COMPLETE 信号。
+等待 `<promise>DELIVERY_COMPLETE</promise>` 信号。
 ```
 
 ## Ralph-Loop 配置
@@ -210,6 +262,26 @@ phases:
     completion_promise: "TEST_GATE_COMPLETE"
     skippable: true
     skip_flag: "--skip-test-gate"
+  - name: "runtime-smoke"
+    status: "pending"
+    completion_promise: "RUNTIME_SMOKE_COMPLETE"
+    skippable: true
+    skip_flag: "--skip-runtime-smoke"
+  - name: "stability-loop"
+    status: "pending"
+    completion_promise: "STABILITY_COMPLETE"
+    skippable: true
+    skip_flag: "--skip-stability-loop"
+  - name: "coverage-gate"
+    status: "pending"
+    completion_promise: "COVERAGE_COMPLETE"
+    skippable: true
+    skip_flag: "--skip-coverage-gate"
+  - name: "policy-gate"
+    status: "pending"
+    completion_promise: "POLICY_COMPLETE"
+    skippable: true
+    skip_flag: "--skip-policy-gate"
   - name: "delivery-packager"
     status: "pending"
     completion_promise: "PACKAGE_COMPLETE"
@@ -231,22 +303,27 @@ phases:
 2. 找到当前 `in_progress` 的 Phase
 3. 继续执行该 Phase（调用对应 Skill：brainstorming 或 writing-plans 或 executing-plans 等）
 4. Phase 运行完成并输出最终信号标签后，标记为 `done`，更新下一阶段为 `in_progress`
-5. 所有阶段完成后，输出最后的 `DELIVERY_COMPLETE` 结束整个流水线
+5. 所有阶段完成后，输出最后的 `<promise>DELIVERY_COMPLETE</promise>` 结束整个流水线
 
 ## 错误处理
 
 - Phase 0/1 失败 → 终止，输出错误日志
 - Phase 2 单个任务失败 → 重试 2 次，仍失败则记录到 `questions.md`，继续下一任务
 - Phase 4 发现阻塞问题 → 自动修复后重新审查（最多 3 轮）
+- Phase 4.6 冒烟失败 → 修复启动/健康检查/API 调用后复验
+- Phase 4.7 稳定性循环失败 → 标记 flaky 并复验
+- Phase 4.8 覆盖率门禁失败 → 增补测试并重跑
+- Phase 4.9 策略门禁失败 → 修复 workflow/policy 后复验
 - Phase 5 validate 失败 → 执行 `--repair`，仍失败则输出错误
 - Phase 6 验收失败 → 修复后自动复验，仍失败则输出阻塞项
 
 ## 完成条件
 
-当 `DELIVERY_COMPLETE` 输出时，整个 Idea2Repo 流程完成。
+当 `<promise>DELIVERY_COMPLETE</promise>` 输出且位于最后一行时，整个 Idea2Repo 流程完成。
 
 最终产物：
 
 - `TASK-{ID}/` 目录，包含完整的可交付项目包
 - `docs/designs/` 和 `docs/plans/`
 - `.tmp/self-review-report.md` 自测报告（不打包）
+

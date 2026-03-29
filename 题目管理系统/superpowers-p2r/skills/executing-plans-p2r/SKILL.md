@@ -1,4 +1,4 @@
----
+﻿---
 name: executing-plans-p2r
 description: "Prompt2Repo Phase 2: 按任务计划生成完整项目代码，BDD驱动+Docker生成+英文检查+工程质量内置检查，支持 Ralph-Loop"
 ---
@@ -256,7 +256,7 @@ echo All tests completed.
 每完成一个任务：
 1. 更新 `docs/plans/_index.md` 中对应任务状态为 `done`
 2. 如果所有任务完成，执行最终质量全检
-3. 输出 `EXECUTION_COMPLETE`
+3. 输出 `<promise>EXECUTION_COMPLETE</promise>`（必须作为回复最后一行）
 
 每次 Loop 迭代开始时：
 1. 读取 `docs/plans/_index.md` 获取进度
@@ -274,4 +274,5 @@ echo All tests completed.
 - Docker 配置已生成（如适用）
 - 英文 Prompt 场景下全部产物无中文字符
 
-输出 `EXECUTION_COMPLETE` 标记完成。
+输出 `<promise>EXECUTION_COMPLETE</promise>` 标记完成，且该标签必须是回复最后一行（后面不得有任何内容）。
+

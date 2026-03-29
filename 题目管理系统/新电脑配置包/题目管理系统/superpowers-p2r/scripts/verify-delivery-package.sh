@@ -126,8 +126,8 @@ check_repo_core_files() {
   fi
 }
 
-# Enforce test-gate artifacts and hardened test execution scripts.
-check_test_gate_artifacts() {
+# Enforce gate artifacts and hardened test execution scripts.
+check_gate_artifacts() {
   local repo_dir="$PACKAGE_DIR/repo"
   local docs_dir="$PACKAGE_DIR/docs"
   local min_unit_files="${MIN_UNIT_TEST_FILES:-3}"
@@ -178,15 +178,27 @@ check_test_gate_artifacts() {
     fi
   fi
 
-  if [ ! -f "$docs_dir/test-gate-report.md" ]; then
-    fail_check "Missing docs/test-gate-report.md (strict testing evidence)"
-  else
-    if grep -Eq 'FAIL=0|FAIL: 0|FAIL\): 0|FAIL\] 0' "$docs_dir/test-gate-report.md"; then
-      pass_check "test-gate-report indicates zero FAIL"
-    else
-      warn_check "test-gate-report present but FAIL=0 pattern not found; review manually"
+  local gate_reports=(
+    "test-gate-report.md"
+    "runtime-smoke-report.md"
+    "stability-loop-report.md"
+    "coverage-gate-report.md"
+    "policy-gate-report.md"
+  )
+
+  local report=""
+  for report in "${gate_reports[@]}"; do
+    if [ ! -f "$docs_dir/$report" ]; then
+      fail_check "Missing docs/$report (quality gate evidence)"
+      continue
     fi
-  fi
+
+    if grep -Eq 'FAIL=0|FAIL: 0|FAIL\): 0|FAIL\] 0' "$docs_dir/$report"; then
+      pass_check "$report indicates zero FAIL"
+    else
+      warn_check "$report present but FAIL=0 pattern not found; review manually"
+    fi
+  done
 }
 
 # Ensure heavy artifacts and cache files are not shipped.
@@ -334,7 +346,7 @@ check_placeholder_secrets() {
     return
   fi
   if command -v rg >/dev/null 2>&1; then
-    local pattern='(your-super-secret-key-change-in-production|POSTGRES_PASSWORD:\s*postgres)'
+    local pattern='(your-super-secret-key-change-in-production|POSTGRES_PASSWORD:\s*postgres|MYSQL_ROOT_PASSWORD:\s*rootpassword|MYSQL_PASSWORD:\s*petpassword|defaultSecretKeyForDevelopmentOnly)'
     if rg -n --no-heading --pcre2 "$pattern" "$repo_dir" >/tmp/delivery-check-secret.txt 2>/dev/null; then
       warn_check "Placeholder/default secret values detected (see report appendix)"
       SECRET_HITS="$(head -n 20 /tmp/delivery-check-secret.txt 2>/dev/null)"
@@ -418,7 +430,7 @@ main() {
 
   check_required_structure
   check_repo_core_files
-  check_test_gate_artifacts
+  check_gate_artifacts
   check_forbidden_artifacts
   check_language_cleanliness
   check_metadata_fields

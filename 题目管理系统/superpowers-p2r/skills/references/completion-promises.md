@@ -40,6 +40,10 @@ A completion promise should name a **state** that is objectively true or false, 
 | `superpowers:writing-plans` | `PLAN_COMPLETE` | All phases done, plan folder committed |
 | `superpowers:executing-plans` | `EXECUTION_COMPLETE` | All tasks executed, verified, and committed |
 | `superpowers:test-gate` | `TEST_GATE_COMPLETE` | Strict test gate passed (no FAIL), report generated |
+| `superpowers:runtime-smoke` | `RUNTIME_SMOKE_COMPLETE` | Runtime smoke passed (service boot + health + API smoke) |
+| `superpowers:stability-loop` | `STABILITY_COMPLETE` | All runtime smoke iterations passed |
+| `superpowers:coverage-gate` | `COVERAGE_COMPLETE` | Coverage thresholds passed |
+| `superpowers:policy-gate` | `POLICY_COMPLETE` | CI/workflow policy checks passed |
 | `superpowers:prompt2repo` | `DELIVERY_COMPLETE` | All pipeline phases completed, delivery check passed |
 
 ## Promise Integrity Rules

@@ -1,4 +1,4 @@
----
+﻿---
 name: delivery-packager
 description: "Prompt2Repo Phase 4: 交付物目录规范化、清理缓存文件、生成 metadata.json、运行 validate_package.py 验证"
 ---
@@ -12,6 +12,10 @@ description: "Prompt2Repo Phase 4: 交付物目录规范化、清理缓存文件
 **前提条件**:
 - Phase 3 自测审查通过（`.tmp/self-review-report.md` 存在且无阻塞问题）
 - Phase 3.5 严格测试门禁通过（`.tmp/test-gate-report.md` 存在且无 FAIL）
+- Phase 3.6 运行态冒烟通过（`.tmp/runtime-smoke-report.md` 存在且无 FAIL）
+- Phase 3.7 稳定性循环通过（`.tmp/stability-loop-report.md` 存在且无 FAIL）
+- Phase 3.8 覆盖率门禁通过（`.tmp/coverage-gate-report.md` 存在且无 FAIL）
+- Phase 3.9 策略门禁通过（`.tmp/policy-gate-report.md` 存在且无 FAIL/WARN 可接受）
 
 ## 输入参数
 
@@ -103,6 +107,10 @@ TASK-{ID}/
 - `requirement-analysis.md` → `docs/design.md`（合并）
 - 如有 API 规格 → `docs/api-spec.md`
 - 复制 `.tmp/test-gate-report.md` → `docs/test-gate-report.md`（若缺失视为阻塞项）
+- 复制 `.tmp/runtime-smoke-report.md` → `docs/runtime-smoke-report.md`（若缺失视为阻塞项）
+- 复制 `.tmp/stability-loop-report.md` → `docs/stability-loop-report.md`（若缺失视为阻塞项）
+- 复制 `.tmp/coverage-gate-report.md` → `docs/coverage-gate-report.md`（若缺失视为阻塞项）
+- 复制 `.tmp/policy-gate-report.md` → `docs/policy-gate-report.md`（若缺失视为阻塞项）
 
 ### Step 5: 复制 prompt.md
 
@@ -198,4 +206,5 @@ python validate_package.py TASK-{ID}/ --repair
 - 所有排除项已清理
 - 最终检查清单全部通过
 
-输出 `PACKAGE_COMPLETE` 标记完成。
+输出 `<promise>PACKAGE_COMPLETE</promise>` 标记完成，且该标签必须是回复最后一行（后面不得有任何内容）。
+

@@ -147,10 +147,15 @@ if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
 
 try {
     # 基于当前项目根目录重新声明 marketplace，保证路径与新电脑实际目录一致。
-    Invoke-ClaudeCli -Arguments @("plugin", "marketplace", "add", $projectDir)
+    # 允许重复执行（已存在时不阻断），随后强制做 update 拉取最新索引。
+    Invoke-ClaudeCli -Arguments @("plugin", "marketplace", "add", $projectDir) -AllowFailure
+    Invoke-ClaudeCli -Arguments @("plugin", "marketplace", "update", "xuexi-local") -AllowFailure
 
-    # 安装并确保启用目标插件
-    Invoke-ClaudeCli -Arguments @("plugin", "install", "superpowers@xuexi-local")
+    # 安装并更新目标插件（兼容“首次安装”和“已安装升级”两种场景）
+    Invoke-ClaudeCli -Arguments @("plugin", "install", "superpowers@xuexi-local") -AllowFailure
+    Invoke-ClaudeCli -Arguments @("plugin", "update", "superpowers@xuexi-local") -AllowFailure
+
+    # 确保最终状态为 enabled
     if (-not (Test-PluginEnabled -PluginId "superpowers@xuexi-local")) {
         Invoke-ClaudeCli -Arguments @("plugin", "enable", "superpowers@xuexi-local")
     }

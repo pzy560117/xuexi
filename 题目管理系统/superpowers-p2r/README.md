@@ -2,7 +2,7 @@
 
 Advanced development superpowers for orchestrating complex workflows from idea to execution.
 
-**Version**: 2.2.0
+**Version**: 2.3.0
 
 ## Installation
 
@@ -51,7 +51,7 @@ claude --print "/superpowers:prompt2repo prompt.md --task-id TASK-20260328-001"
 claude --print "/superpowers:prompt2repo prompt.md --skip-package"
 ```
 
-可选：如果需要跳过 Phase 3 自测审查，可额外加 `--skip-review`；如需跳过 Phase 3.5 严格测试门禁，可加 `--skip-test-gate`（不建议）。
+可选：如果需要跳过 Phase 3 自测审查，可额外加 `--skip-review`；质量门禁可按需跳过（如 `--skip-test-gate`、`--skip-runtime-smoke`、`--skip-stability-loop`、`--skip-coverage-gate`、`--skip-policy-gate`），默认不建议跳过。
 
 ## 跨项目一键使用（Git Bash）
 

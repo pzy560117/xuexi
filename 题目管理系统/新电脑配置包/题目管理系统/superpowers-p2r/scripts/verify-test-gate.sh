@@ -123,8 +123,8 @@ strict_or_warn() {
 
 # Count test files for unit/API scopes.
 count_test_files() {
-  UNIT_TEST_FILE_COUNT=$(find "$REPO_DIR/unit_tests" -type f \( -name 'test_*.py' -o -name '*.test.js' -o -name '*.test.ts' -o -name '*.spec.js' -o -name '*.spec.ts' \) 2>/dev/null | wc -l | tr -d ' ')
-  API_TEST_FILE_COUNT=$(find "$REPO_DIR/API_tests" -type f \( -name 'test_*.py' -o -name '*.test.js' -o -name '*.test.ts' -o -name '*.spec.js' -o -name '*.spec.ts' \) 2>/dev/null | wc -l | tr -d ' ')
+  UNIT_TEST_FILE_COUNT=$(find "$REPO_DIR/unit_tests" "$REPO_DIR/tests" "$REPO_DIR/src/test/java" -type f \( -name 'test_*.py' -o -name '*.test.js' -o -name '*.test.ts' -o -name '*.spec.js' -o -name '*.spec.ts' -o -name '*Test.java' -o -name '*Tests.java' \) 2>/dev/null | wc -l | tr -d ' ')
+  API_TEST_FILE_COUNT=$(find "$REPO_DIR/API_tests" -type f \( -name 'test_*.py' -o -name '*.test.js' -o -name '*.test.ts' -o -name '*.spec.js' -o -name '*.spec.ts' -o -name '*Test.java' -o -name '*Tests.java' \) 2>/dev/null | wc -l | tr -d ' ')
 
   if [[ "$UNIT_TEST_FILE_COUNT" -ge "$MIN_UNIT_TEST_FILES" ]]; then
     pass_check "Unit test file count ${UNIT_TEST_FILE_COUNT} >= ${MIN_UNIT_TEST_FILES}"
@@ -164,8 +164,87 @@ check_test_script_hardening() {
   fi
 }
 
+# Parse JaCoCo XML and return LINE coverage percentage (integer).
+parse_jacoco_line_coverage() {
+  local jacoco_xml="$1"
+  local line_counter
+  line_counter="$(grep -o '<counter type="LINE" missed="[0-9]*" covered="[0-9]*"/>' "$jacoco_xml" | tail -n 1 || true)"
+  if [[ -z "$line_counter" ]]; then
+    echo ""
+    return
+  fi
+  local missed covered total percent
+  missed="$(echo "$line_counter" | sed -E 's/.*missed="([0-9]+)".*/\1/')"
+  covered="$(echo "$line_counter" | sed -E 's/.*covered="([0-9]+)".*/\1/')"
+  total=$((missed + covered))
+  if [[ "$total" -le 0 ]]; then
+    echo "0"
+    return
+  fi
+  percent="$(awk -v c="$covered" -v t="$total" 'BEGIN { printf("%d", (c/t)*100) }')"
+  echo "$percent"
+}
+
+# Run Maven unit tests and enforce coverage threshold when JaCoCo report exists.
+run_maven_unit_tests_with_coverage() {
+  if ! command -v mvn >/dev/null 2>&1; then
+    strict_or_warn "mvn is unavailable; cannot run Maven unit tests"
+    return
+  fi
+
+  local pom_dir="$REPO_DIR"
+  if [[ -f "$REPO_DIR/unit_tests/pom.xml" ]]; then
+    pom_dir="$REPO_DIR/unit_tests"
+  fi
+
+  UNIT_TEST_LOG=$(mktemp)
+  set +e
+  (cd "$pom_dir" && mvn -q test) >"$UNIT_TEST_LOG" 2>&1
+  UNIT_TEST_EXIT=$?
+  set -e
+
+  UNIT_TEST_OUTPUT="$(cat "$UNIT_TEST_LOG")"
+  rm -f "$UNIT_TEST_LOG"
+
+  if [[ "$UNIT_TEST_EXIT" -ne 0 ]]; then
+    fail_check "Maven unit tests failed"
+    UNIT_LOG_SNIPPET="$(echo "$UNIT_TEST_OUTPUT" | tail -n 80)"
+    return
+  fi
+  pass_check "Maven unit tests passed"
+
+  local jacoco_xml=""
+  if [[ -f "$pom_dir/target/site/jacoco/jacoco.xml" ]]; then
+    jacoco_xml="$pom_dir/target/site/jacoco/jacoco.xml"
+  elif [[ -f "$REPO_DIR/target/site/jacoco/jacoco.xml" ]]; then
+    jacoco_xml="$REPO_DIR/target/site/jacoco/jacoco.xml"
+  fi
+
+  if [[ -z "$jacoco_xml" ]]; then
+    strict_or_warn "JaCoCo coverage report missing; cannot enforce unit coverage threshold"
+    return
+  fi
+
+  UNIT_COVERAGE="$(parse_jacoco_line_coverage "$jacoco_xml")"
+  if [[ -z "$UNIT_COVERAGE" ]]; then
+    strict_or_warn "Unable to parse JaCoCo LINE coverage percentage"
+    return
+  fi
+
+  if [[ "$UNIT_COVERAGE" -ge "$MIN_UNIT_COVERAGE" ]]; then
+    pass_check "Unit coverage ${UNIT_COVERAGE}% >= ${MIN_UNIT_COVERAGE}%"
+  else
+    fail_check "Unit coverage ${UNIT_COVERAGE}% < ${MIN_UNIT_COVERAGE}%"
+  fi
+}
+
 # Execute unit tests with coverage threshold.
 run_unit_tests_with_coverage() {
+  if [[ -f "$REPO_DIR/pom.xml" ]] || [[ -f "$REPO_DIR/unit_tests/pom.xml" ]]; then
+    run_maven_unit_tests_with_coverage
+    return
+  fi
+
   if [[ ! -d "$REPO_DIR/unit_tests" ]]; then
     fail_check "unit_tests directory missing"
     return
@@ -320,10 +399,34 @@ run_api_tests() {
     return
   fi
 
-  set +e
-  python -m pytest "$REPO_DIR/API_tests" -q --maxfail=1 --disable-warnings >"$API_TEST_LOG" 2>&1
-  API_TEST_EXIT=$?
-  set -e
+  local api_runner=""
+  if [[ -f "$REPO_DIR/run_api_tests.sh" ]]; then
+    set +e
+    (cd "$REPO_DIR" && bash ./run_api_tests.sh) >"$API_TEST_LOG" 2>&1
+    API_TEST_EXIT=$?
+    set -e
+    api_runner="run_api_tests.sh"
+  elif [[ -f "$REPO_DIR/run_api_tests.bat" ]] && command -v cmd.exe >/dev/null 2>&1; then
+    local win_repo
+    win_repo="$(cd "$REPO_DIR" && pwd -W 2>/dev/null || echo "$REPO_DIR")"
+    set +e
+    cmd.exe /c "cd /d \"${win_repo}\" && run_api_tests.bat" >"$API_TEST_LOG" 2>&1
+    API_TEST_EXIT=$?
+    set -e
+    api_runner="run_api_tests.bat"
+  elif [[ -f "$REPO_DIR/API_tests/pom.xml" ]] && command -v mvn >/dev/null 2>&1; then
+    set +e
+    (cd "$REPO_DIR/API_tests" && mvn -q -DfailIfNoTests=true test) >"$API_TEST_LOG" 2>&1
+    API_TEST_EXIT=$?
+    set -e
+    api_runner="maven-api-tests"
+  else
+    set +e
+    python -m pytest "$REPO_DIR/API_tests" -q --maxfail=1 --disable-warnings >"$API_TEST_LOG" 2>&1
+    API_TEST_EXIT=$?
+    set -e
+    api_runner="pytest-api-tests"
+  fi
 
   API_TEST_OUTPUT="$(cat "$API_TEST_LOG")"
   rm -f "$API_TEST_LOG"
@@ -331,12 +434,12 @@ run_api_tests() {
   (cd "$REPO_DIR" && docker compose down >/dev/null 2>&1) || true
 
   if [[ "$API_TEST_EXIT" -ne 0 ]]; then
-    fail_check "API integration tests failed"
+    fail_check "API integration tests failed via ${api_runner}"
     API_LOG_SNIPPET="$(echo "$API_TEST_OUTPUT" | tail -n 80)"
     return
   fi
 
-  pass_check "API integration tests passed"
+  pass_check "API integration tests passed via ${api_runner}"
 }
 
 # Persist markdown report to disk.

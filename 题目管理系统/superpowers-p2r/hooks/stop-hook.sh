@@ -93,6 +93,114 @@ register_registry_path() {
   mv "$tmp" "$REGISTRY_FILE"
 }
 
+PHASE_NAMES=(
+  "prompt-parser" "spec-gateway" "writing-plans-p2r" "consistency-gate"
+  "executing-plans-p2r" "domain-checklist" "self-review" "test-gate"
+  "runtime-smoke" "stability-loop" "coverage-gate" "policy-gate"
+  "delivery-packager" "delivery-checker"
+)
+PHASE_PROMISES=(
+  "PROMPT_PARSING_COMPLETE" "SPEC_COMPLETE" "PLANNING_COMPLETE" "ANALYSIS_COMPLETE"
+  "EXECUTION_COMPLETE" "CHECKLIST_COMPLETE" "SELF_REVIEW_COMPLETE" "TEST_GATE_COMPLETE"
+  "RUNTIME_SMOKE_COMPLETE" "STABILITY_COMPLETE" "COVERAGE_COMPLETE" "POLICY_COMPLETE"
+  "PACKAGE_COMPLETE" "DELIVERY_COMPLETE"
+)
+PHASE_SKIPPABLE=(
+  "no" "yes" "no" "yes"
+  "no" "yes" "yes" "yes"
+  "yes" "yes" "yes" "yes"
+  "yes" "yes"
+)
+
+phase_index_from_name() {
+  local raw_name="$1"
+  local normalized
+  normalized=$(printf '%s' "$raw_name" | tr '[:upper:]' '[:lower:]')
+  normalized=$(printf '%s' "$normalized" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+  normalized=$(printf '%s' "$normalized" | sed 's/[[:space:]]\+/ /g')
+
+  case "$normalized" in
+    "prompt-parser"|"prompt parser") echo 0 ;;
+    "spec-gateway"|"spec gateway") echo 1 ;;
+    "writing-plans-p2r"|"writing-plans"|"writing plans p2r"|"writing plans") echo 2 ;;
+    "consistency-gate"|"consistency gate") echo 3 ;;
+    "executing-plans-p2r"|"executing-plans"|"executing plans p2r"|"executing plans"|"implementation") echo 4 ;;
+    "domain-checklist"|"domain checklist") echo 5 ;;
+    "self-review"|"self review") echo 6 ;;
+    "test-gate"|"test gate") echo 7 ;;
+    "runtime-smoke"|"runtime smoke") echo 8 ;;
+    "stability-loop"|"stability loop") echo 9 ;;
+    "coverage-gate"|"coverage gate") echo 10 ;;
+    "policy-gate"|"policy gate") echo 11 ;;
+    "delivery-packager"|"delivery packager") echo 12 ;;
+    "delivery-checker"|"delivery checker") echo 13 ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+write_canonical_state() {
+  local state_path="$1"
+  local phase_idx="$2"
+  local iteration_value="${3:-1}"
+  local max_iterations_value="${4:-100}"
+  local completion_promise_value="${5:-DELIVERY_COMPLETE}"
+  local started_at_value="${6:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+  local session_value="${7:-$HOOK_SESSION}"
+
+  if [[ ! "$phase_idx" =~ ^[0-9]+$ ]]; then
+    return 1
+  fi
+  local last_idx
+  last_idx=$((${#PHASE_NAMES[@]} - 1))
+  if [[ "$phase_idx" -lt 0 ]] || [[ "$phase_idx" -gt "$last_idx" ]]; then
+    return 1
+  fi
+
+  local state_dir
+  state_dir="$(dirname "$state_path")"
+  mkdir -p "$state_dir"
+
+  {
+    echo "---"
+    echo "active: true"
+    echo "iteration: ${iteration_value}"
+    echo "session_id: \"${session_value}\""
+    echo "max_iterations: ${max_iterations_value}"
+    echo "completion_promise: \"${completion_promise_value}\""
+    echo "started_at: \"${started_at_value}\""
+    echo "current_phase: ${phase_idx}"
+    echo "phases:"
+    local i
+    local status
+    local skippable
+    for i in "${!PHASE_NAMES[@]}"; do
+      status="pending"
+      if [[ "$i" -lt "$phase_idx" ]]; then
+        status="done"
+      elif [[ "$i" -eq "$phase_idx" ]]; then
+        status="in_progress"
+      fi
+      skippable="false"
+      if [[ "${PHASE_SKIPPABLE[$i]}" == "yes" ]]; then
+        skippable="true"
+      fi
+      echo "  - name: \"${PHASE_NAMES[$i]}\""
+      echo "    status: \"${status}\""
+      echo "    completion_promise: \"${PHASE_PROMISES[$i]}\""
+      echo "    skippable: ${skippable}"
+    done
+    echo "---"
+    echo
+    echo "# Superpower Loop State"
+    echo
+    echo "## Phases"
+  } > "$state_path"
+
+  return 0
+}
+
 # Recovery path:
 # If Phase 0 has completed but loop state is missing (bootstrap not persisted),
 # reconstruct a canonical prompt2repo loop state so stop-hook can continue Phase 0.5.
@@ -113,39 +221,7 @@ recover_state_from_phase0_completion() {
   local recovered_dir
   recovered_dir="$(dirname "$recovered_state")"
   mkdir -p "$recovered_dir"
-
-  cat > "$recovered_state" <<EOF
----
-active: true
-iteration: 1
-session_id: "${HOOK_SESSION}"
-max_iterations: 100
-completion_promise: "DELIVERY_COMPLETE"
-started_at: "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-current_phase: 1
----
-
-# Superpower Loop State
-
-## Phases
-
-| # | Name | Status | Completion Promise | Skippable |
-|---|------|--------|-------------------|-----------|
-| 0 | prompt-parser | done | PROMPT_PARSING_COMPLETE | no |
-| 1 | spec-gateway | in_progress | SPEC_COMPLETE | yes |
-| 2 | writing-plans-p2r | pending | PLANNING_COMPLETE | no |
-| 3 | consistency-gate | pending | ANALYSIS_COMPLETE | yes |
-| 4 | executing-plans-p2r | pending | EXECUTION_COMPLETE | no |
-| 5 | domain-checklist | pending | CHECKLIST_COMPLETE | yes |
-| 6 | self-review | pending | SELF_REVIEW_COMPLETE | yes |
-| 7 | test-gate | pending | TEST_GATE_COMPLETE | yes |
-| 8 | runtime-smoke | pending | RUNTIME_SMOKE_COMPLETE | yes |
-| 9 | stability-loop | pending | STABILITY_COMPLETE | yes |
-| 10 | coverage-gate | pending | COVERAGE_COMPLETE | yes |
-| 11 | policy-gate | pending | POLICY_COMPLETE | yes |
-| 12 | delivery-packager | pending | PACKAGE_COMPLETE | yes |
-| 13 | delivery-checker | pending | DELIVERY_COMPLETE | yes |
-EOF
+  write_canonical_state "$recovered_state" 1 1 100 "DELIVERY_COMPLETE" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$HOOK_SESSION"
 
   local bootstrap_file="${recovered_dir}/superpower-loop.bootstrap.md"
   cat > "$bootstrap_file" <<EOF
@@ -199,59 +275,62 @@ recover_state_from_legacy_status_markdown() {
     "Phase 4.5 (delivery-checker)") phase_idx=13 ;;
     *) return 1 ;;
   esac
+  local state_path="$SUPERPOWER_STATE_FILE"
+  local state_dir
+  state_dir="$(dirname "$state_path")"
+  mkdir -p "$state_dir"
 
-  local phase_names=(
-    "prompt-parser" "spec-gateway" "writing-plans-p2r" "consistency-gate"
-    "executing-plans-p2r" "domain-checklist" "self-review" "test-gate"
-    "runtime-smoke" "stability-loop" "coverage-gate" "policy-gate"
-    "delivery-packager" "delivery-checker"
-  )
-  local phase_promises=(
-    "PROMPT_PARSING_COMPLETE" "SPEC_COMPLETE" "PLANNING_COMPLETE" "ANALYSIS_COMPLETE"
-    "EXECUTION_COMPLETE" "CHECKLIST_COMPLETE" "SELF_REVIEW_COMPLETE" "TEST_GATE_COMPLETE"
-    "RUNTIME_SMOKE_COMPLETE" "STABILITY_COMPLETE" "COVERAGE_COMPLETE" "POLICY_COMPLETE"
-    "PACKAGE_COMPLETE" "DELIVERY_COMPLETE"
-  )
-  local phase_skippable=(
-    "no" "yes" "no" "yes"
-    "no" "yes" "yes" "yes"
-    "yes" "yes" "yes" "yes"
-    "yes" "yes"
-  )
+  write_canonical_state "$state_path" "$phase_idx" 1 100 "DELIVERY_COMPLETE" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$HOOK_SESSION"
+
+  local recovered_abs
+  recovered_abs="$(cd "$state_dir" && pwd)/$(basename "$state_path")"
+  register_registry_path "$recovered_abs"
+  return 0
+}
+
+# Recovery path:
+# Some runs rewrite state into runtime report markdown format, for example:
+# - **current_phase_index**: 1
+# - **next_phase**: writing-plans-p2r (Phase 2)
+# Convert this format back into canonical YAML phase state.
+recover_state_from_runtime_status_markdown() {
+  local content="$1"
+
+  if ! printf '%s\n' "$content" | grep -Eq '^#[[:space:]]+Superpower Loop Runtime State'; then
+    return 1
+  fi
+
+  local current_phase_index
+  local current_phase_name
+  local next_phase_name
+  local target_idx=""
+
+  current_phase_index=$(printf '%s\n' "$content" | sed -n 's/.*\*\*current_phase_index\*\*:[[:space:]]*\([0-9]\+\).*/\1/p' | head -n 1)
+  current_phase_name=$(printf '%s\n' "$content" | sed -n 's/.*\*\*current_phase\*\*:[[:space:]]*\([^()]*\).*/\1/p' | head -n 1 | sed 's/^[[:space:]-]*//; s/[[:space:]]*$//')
+  next_phase_name=$(printf '%s\n' "$content" | sed -n 's/.*\*\*next_phase\*\*:[[:space:]]*\([^()]*\).*/\1/p' | head -n 1 | sed 's/^[[:space:]-]*//; s/[[:space:]]*$//')
+
+  if [[ "$current_phase_index" =~ ^[0-9]+$ ]]; then
+    target_idx="$current_phase_index"
+  fi
+
+  if [[ -z "$target_idx" ]] && [[ -n "$current_phase_name" ]]; then
+    target_idx=$(phase_index_from_name "$current_phase_name" || true)
+  fi
+
+  if [[ -z "$target_idx" ]] && [[ -n "$next_phase_name" ]]; then
+    target_idx=$(phase_index_from_name "$next_phase_name" || true)
+  fi
+
+  if [[ ! "$target_idx" =~ ^[0-9]+$ ]]; then
+    return 1
+  fi
 
   local state_path="$SUPERPOWER_STATE_FILE"
   local state_dir
   state_dir="$(dirname "$state_path")"
   mkdir -p "$state_dir"
 
-  {
-    echo "---"
-    echo "active: true"
-    echo "iteration: 1"
-    echo "session_id: \"${HOOK_SESSION}\""
-    echo "max_iterations: 100"
-    echo "completion_promise: \"DELIVERY_COMPLETE\""
-    echo "started_at: \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\""
-    echo "current_phase: ${phase_idx}"
-    echo "---"
-    echo
-    echo "# Superpower Loop State"
-    echo
-    echo "## Phases"
-    echo
-    echo "| # | Name | Status | Completion Promise | Skippable |"
-    echo "|---|------|--------|-------------------|-----------|"
-    local i
-    for i in "${!phase_names[@]}"; do
-      local status="pending"
-      if [[ "$i" -lt "$phase_idx" ]]; then
-        status="done"
-      elif [[ "$i" -eq "$phase_idx" ]]; then
-        status="in_progress"
-      fi
-      echo "| ${i} | ${phase_names[$i]} | ${status} | ${phase_promises[$i]} | ${phase_skippable[$i]} |"
-    done
-  } > "$state_path"
+  write_canonical_state "$state_path" "$target_idx" 1 100 "DELIVERY_COMPLETE" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$HOOK_SESSION"
 
   local recovered_abs
   recovered_abs="$(cd "$state_dir" && pwd)/$(basename "$state_path")"
@@ -652,13 +731,25 @@ output_has_explicit_promise_signal() {
     return 0
   fi
 
-  if printf '%s\n' "$LAST_OUTPUT" | grep -Eq "^[[:space:][:punct:]]*<promise>[[:space:]]*${token}[[:space:]]*</promise>[[:space:][:punct:]]*$"; then
+  if [[ "$LAST_OUTPUT" =~ \<promise\>[[:space:]]*${token}[[:space:]]*\<\/promise\> ]]; then
     return 0
   fi
-  if printf '%s\n' "$LAST_OUTPUT" | grep -Eq "^[[:space:][:punct:]]*${token}[[:space:][:punct:]]*$"; then
+  if [[ "$LAST_OUTPUT" =~ (^|[[:space:][:punct:]])${token}([[:space:][:punct:]]|$) ]]; then
     return 0
   fi
-  if printf '%s\n' "$LAST_OUTPUT" | grep -Eq "\"promise\"[[:space:]]*:[[:space:]]*\"${token}\""; then
+  if [[ "$LAST_OUTPUT" == *"\"promise\""* ]] && [[ "$LAST_OUTPUT" == *"\"${token}\""* ]]; then
+    return 0
+  fi
+  return 1
+}
+
+output_contains_completion_word() {
+  local lower_text
+  lower_text=$(printf '%s' "$LAST_OUTPUT" | tr '[:upper:]' '[:lower:]')
+  if [[ "$lower_text" == *"complete"* ]] || [[ "$lower_text" == *"completed"* ]] || [[ "$lower_text" == *"done"* ]] || [[ "$lower_text" == *"finish"* ]] || [[ "$lower_text" == *"finished"* ]] || [[ "$lower_text" == *"pass"* ]]; then
+    return 0
+  fi
+  if [[ "$LAST_OUTPUT" == *"通过"* ]] || [[ "$LAST_OUTPUT" == *"完成"* ]] || [[ "$LAST_OUTPUT" == *"已完成"* ]]; then
     return 0
   fi
   return 1
@@ -678,11 +769,15 @@ output_has_phase_completion_hint() {
     return 0
   fi
 
-  if [[ -n "$phase_label" ]] && printf '%s' "$lower" | grep -Fqi "$(printf '%s' "$phase_label" | tr '[:upper:]' '[:lower:]')" && printf '%s' "$LAST_OUTPUT" | grep -Eqi "(complete|completed|done|finish|finished|pass|通过|完成|已完成)"; then
+  local phase_label_lower
+  phase_label_lower=$(printf '%s' "$phase_label" | tr '[:upper:]' '[:lower:]')
+  if [[ -n "$phase_label_lower" ]] && [[ "$lower" == *"$phase_label_lower"* ]] && output_contains_completion_word; then
     return 0
   fi
 
-  if [[ -n "$phase_name" ]] && printf '%s' "$lower" | grep -Fqi "$phase_name" && printf '%s' "$LAST_OUTPUT" | grep -Eqi "(complete|completed|done|finish|finished|pass|通过|完成|已完成)"; then
+  local phase_name_lower
+  phase_name_lower=$(printf '%s' "$phase_name" | tr '[:upper:]' '[:lower:]')
+  if [[ -n "$phase_name_lower" ]] && [[ "$lower" == *"$phase_name_lower"* ]] && output_contains_completion_word; then
     return 0
   fi
 
@@ -690,7 +785,12 @@ output_has_phase_completion_hint() {
 }
 
 output_has_global_completion_hint() {
-  printf '%s\n' "$LAST_OUTPUT" | grep -Eqi "(all phases completed|pipeline has completed|pipeline completed|delivery complete|DELIVERY_COMPLETE|全部阶段完成|流水线完成|交付完成)"
+  local lower
+  lower=$(printf '%s' "$LAST_OUTPUT" | tr '[:upper:]' '[:lower:]')
+  if [[ "$lower" == *"all phases completed"* ]] || [[ "$lower" == *"pipeline has completed"* ]] || [[ "$lower" == *"pipeline completed"* ]] || [[ "$lower" == *"delivery complete"* ]] || [[ "$LAST_OUTPUT" == *"DELIVERY_COMPLETE"* ]] || [[ "$LAST_OUTPUT" == *"全部阶段完成"* ]] || [[ "$LAST_OUTPUT" == *"流水线完成"* ]] || [[ "$LAST_OUTPUT" == *"交付完成"* ]]; then
+    return 0
+  fi
+  return 1
 }
 
 # Parse a candidate state file and match session ownership.
@@ -768,15 +868,19 @@ ITERATION=$(echo "$FRONTMATTER" | grep '^iteration:' | sed 's/iteration: *//' ||
 MAX_ITERATIONS=$(echo "$FRONTMATTER" | grep '^max_iterations:' | sed 's/max_iterations: *//' || true)
 # Extract completion_promise and strip surrounding quotes if present
 COMPLETION_PROMISE=$(echo "$FRONTMATTER" | grep '^completion_promise:' | sed 's/completion_promise: *//' | sed 's/^"\(.*\)"$/\1/' || true)
+STATE_SESSION_ID=$(echo "$FRONTMATTER" | grep '^session_id:' | sed 's/session_id: *//' | sed 's/^"\(.*\)"$/\1/' || true)
+STARTED_AT=$(echo "$FRONTMATTER" | grep '^started_at:' | sed 's/started_at: *//' | sed 's/^"\(.*\)"$/\1/' || true)
 
 # If state file was overwritten into markdown report format, try recovery once.
 if [[ ! "$ITERATION" =~ ^[0-9]+$ ]] || [[ ! "$MAX_ITERATIONS" =~ ^[0-9]+$ ]]; then
-  if recover_state_from_legacy_status_markdown "$STATE_CONTENT"; then
+  if recover_state_from_legacy_status_markdown "$STATE_CONTENT" || recover_state_from_runtime_status_markdown "$STATE_CONTENT"; then
     STATE_CONTENT=$(awk 'NR==1{sub(/^\xef\xbb\xbf/,"")} {print}' "$SUPERPOWER_STATE_FILE")
     FRONTMATTER=$(printf '%s\n' "$STATE_CONTENT" | sed -n '/^---$/,/^---$/{ /^---$/d; p; }')
     ITERATION=$(echo "$FRONTMATTER" | grep '^iteration:' | sed 's/iteration: *//' || true)
     MAX_ITERATIONS=$(echo "$FRONTMATTER" | grep '^max_iterations:' | sed 's/max_iterations: *//' || true)
     COMPLETION_PROMISE=$(echo "$FRONTMATTER" | grep '^completion_promise:' | sed 's/completion_promise: *//' | sed 's/^"\(.*\)"$/\1/' || true)
+    STATE_SESSION_ID=$(echo "$FRONTMATTER" | grep '^session_id:' | sed 's/session_id: *//' | sed 's/^"\(.*\)"$/\1/' || true)
+    STARTED_AT=$(echo "$FRONTMATTER" | grep '^started_at:' | sed 's/started_at: *//' | sed 's/^"\(.*\)"$/\1/' || true)
   fi
 fi
 
@@ -812,6 +916,24 @@ fi
 # Derive current/next phase metadata early (YAML first, markdown fallback).
 if ! parse_phase_metadata_from_frontmatter "$FRONTMATTER"; then
   parse_phase_metadata_from_markdown_table "$STATE_CONTENT" || true
+fi
+
+# Self-heal: convert non-YAML phase states (table/report style) into canonical YAML.
+if [[ "${CURRENT_PHASE_INDEX:--1}" =~ ^[0-9]+$ ]] && ! printf '%s\n' "$FRONTMATTER" | grep -Eq '^[[:space:]]*-[[:space:]]*name:[[:space:]]*'; then
+  if [[ -z "$STATE_SESSION_ID" ]] || [[ "$STATE_SESSION_ID" == "null" ]]; then
+    STATE_SESSION_ID="$HOOK_SESSION"
+  fi
+  if [[ -z "$STARTED_AT" ]] || [[ "$STARTED_AT" == "null" ]]; then
+    STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  fi
+  if [[ -z "$COMPLETION_PROMISE" ]] || [[ "$COMPLETION_PROMISE" == "null" ]]; then
+    COMPLETION_PROMISE="DELIVERY_COMPLETE"
+  fi
+
+  write_canonical_state "$SUPERPOWER_STATE_FILE" "$CURRENT_PHASE_INDEX" "$ITERATION" "$MAX_ITERATIONS" "$COMPLETION_PROMISE" "$STARTED_AT" "$STATE_SESSION_ID"
+  STATE_CONTENT=$(awk 'NR==1{sub(/^\xef\xbb\xbf/,"")} {print}' "$SUPERPOWER_STATE_FILE")
+  FRONTMATTER=$(printf '%s\n' "$STATE_CONTENT" | sed -n '/^---$/,/^---$/{ /^---$/d; p; }')
+  parse_phase_metadata_from_frontmatter "$FRONTMATTER" || parse_phase_metadata_from_markdown_table "$STATE_CONTENT" || true
 fi
 
 # Self-heal: ensure only one in_progress exists.
@@ -968,6 +1090,8 @@ if [[ -z "$PROMPT_TEXT" ]]; then
   SHOULD_SYNTHESIZE=1
 elif printf '%s\n' "$STATE_CONTENT" | grep -q '^## Phases'; then
   SHOULD_SYNTHESIZE=1
+elif printf '%s\n' "$FRONTMATTER" | grep -Eq '^[[:space:]]*phases:[[:space:]]*$'; then
+  SHOULD_SYNTHESIZE=1
 fi
 
 if [[ "$SHOULD_SYNTHESIZE" -eq 1 ]]; then
@@ -1018,7 +1142,13 @@ fi
 # Update iteration in frontmatter (portable across macOS and Linux)
 # Create temp file, then atomically replace
 TEMP_FILE="${SUPERPOWER_STATE_FILE}.tmp.$$"
-sed "s/^iteration: .*/iteration: $NEXT_ITERATION/" "$SUPERPOWER_STATE_FILE" > "$TEMP_FILE"
+awk -v ni="$NEXT_ITERATION" '
+  NR==1 { sub(/^\xef\xbb\xbf/, "") }
+  /^iteration:[[:space:]]*/ {
+    sub(/^iteration:.*/, "iteration: " ni)
+  }
+  { print }
+' "$SUPERPOWER_STATE_FILE" > "$TEMP_FILE"
 mv "$TEMP_FILE" "$SUPERPOWER_STATE_FILE"
 
 # Build system message with iteration count and completion promise info

@@ -16,6 +16,37 @@ HOOK_SESSION=$(echo "$HOOK_INPUT" | jq -r '.session_id // ""')
 # and scans both the new default path and legacy .claude path.
 SUPERPOWER_STATE_FILE=""
 ALL_CANDIDATES=()
+REGISTRY_FILE="${HOME}/.claude/superpower-loop-registry.txt"
+
+# Remove stale registry entries (best effort, never block hook flow).
+prune_registry_path() {
+  local target="$1"
+  [[ -n "$target" ]] || return 0
+  [[ -f "$REGISTRY_FILE" ]] || return 0
+  local tmp="${REGISTRY_FILE}.tmp.$$"
+  grep -F -x -v "$target" "$REGISTRY_FILE" > "$tmp" || true
+  mv "$tmp" "$REGISTRY_FILE"
+}
+
+# Parse a candidate state file and match session ownership.
+inspect_candidate() {
+  local candidate="$1"
+  [[ -f "$candidate" ]] || return 1
+  ALL_CANDIDATES+=("$candidate")
+  # Normalize UTF-8 BOM on first line before parsing frontmatter.
+  local candidate_content
+  candidate_content=$(awk 'NR==1{sub(/^\xef\xbb\xbf/,"")} {print}' "$candidate")
+  local candidate_frontmatter
+  candidate_frontmatter=$(printf '%s\n' "$candidate_content" | sed -n '/^---$/,/^---$/{ /^---$/d; p; }')
+  local candidate_session
+  candidate_session=$(echo "$candidate_frontmatter" | grep '^session_id:' | sed 's/session_id: *//' || true)
+  # Match explicit session_id, or fall through for legacy files without one.
+  if [[ -z "$candidate_session" ]] || [[ "$candidate_session" == "$HOOK_SESSION" ]]; then
+    SUPERPOWER_STATE_FILE="$candidate"
+    return 0
+  fi
+  return 1
+}
 
 STATE_GLOBS=(
   "docs/runtime/superpower-loop*.local.md"
@@ -24,19 +55,24 @@ STATE_GLOBS=(
 
 for pattern in "${STATE_GLOBS[@]}"; do
   for candidate in $pattern; do
-    [[ -f "$candidate" ]] || continue
-    ALL_CANDIDATES+=("$candidate")
-    # Normalize UTF-8 BOM on first line before parsing frontmatter.
-    CANDIDATE_CONTENT=$(awk 'NR==1{sub(/^\xef\xbb\xbf/,"")} {print}' "$candidate")
-    CANDIDATE_FRONTMATTER=$(printf '%s\n' "$CANDIDATE_CONTENT" | sed -n '/^---$/,/^---$/{ /^---$/d; p; }')
-    CANDIDATE_SESSION=$(echo "$CANDIDATE_FRONTMATTER" | grep '^session_id:' | sed 's/session_id: *//' || true)
-    # Match explicit session_id, or fall through for legacy files without one
-    if [[ -z "$CANDIDATE_SESSION" ]] || [[ "$CANDIDATE_SESSION" == "$HOOK_SESSION" ]]; then
-      SUPERPOWER_STATE_FILE="$candidate"
+    if inspect_candidate "$candidate"; then
       break 2
     fi
   done
 done
+
+if [[ -z "$SUPERPOWER_STATE_FILE" ]] && [[ -f "$REGISTRY_FILE" ]]; then
+  while IFS= read -r candidate; do
+    [[ -n "$candidate" ]] || continue
+    if [[ ! -f "$candidate" ]]; then
+      prune_registry_path "$candidate"
+      continue
+    fi
+    if inspect_candidate "$candidate"; then
+      break
+    fi
+  done < "$REGISTRY_FILE"
+fi
 
 if [[ -z "$SUPERPOWER_STATE_FILE" ]]; then
   # Compatibility fallback:
@@ -82,7 +118,8 @@ fi
 # Check if max iterations reached
 if [[ $MAX_ITERATIONS -gt 0 ]] && [[ $ITERATION -ge $MAX_ITERATIONS ]]; then
   echo "Superpower loop: Max iterations ($MAX_ITERATIONS) reached."
-  rm "$SUPERPOWER_STATE_FILE"
+  rm -f "$SUPERPOWER_STATE_FILE"
+  prune_registry_path "$SUPERPOWER_STATE_FILE"
   exit 0
 fi
 
@@ -119,12 +156,25 @@ if [[ "$COMPLETION_PROMISE" != "null" ]] && [[ -n "$COMPLETION_PROMISE" ]]; then
   # -0777 slurps entire input, s flag makes . match newlines
   # .*? is non-greedy (takes FIRST tag), whitespace normalized
   PROMISE_TEXT=$(echo "$LAST_OUTPUT" | perl -0777 -pe 's/.*?<promise>(.*?)<\/promise>.*/$1/s; s/^\s+|\s+$//g; s/\s+/ /g' 2>/dev/null || echo "")
+  LAST_NON_EMPTY_LINE=$(printf '%s\n' "$LAST_OUTPUT" | awk 'NF{line=$0} END{print line}')
+  LAST_NON_EMPTY_LINE=$(echo "$LAST_NON_EMPTY_LINE" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
 
   # Use = for literal string comparison (not pattern matching)
   # == in [[ ]] does glob pattern matching which breaks with *, ?, [ characters
   if [[ -n "$PROMISE_TEXT" ]] && [[ "$PROMISE_TEXT" = "$COMPLETION_PROMISE" ]]; then
     echo "Superpower loop: Detected <promise>$COMPLETION_PROMISE</promise>"
-    rm "$SUPERPOWER_STATE_FILE"
+    rm -f "$SUPERPOWER_STATE_FILE"
+    prune_registry_path "$SUPERPOWER_STATE_FILE"
+    exit 0
+  fi
+
+  # Backward compatibility:
+  # Some model turns may output bare completion text without <promise> tags.
+  # Accept only when the LAST non-empty line is an exact literal match.
+  if [[ -z "$PROMISE_TEXT" ]] && [[ "$LAST_NON_EMPTY_LINE" = "$COMPLETION_PROMISE" ]]; then
+    echo "Superpower loop: Detected legacy completion line '$COMPLETION_PROMISE' (without <promise> tag)"
+    rm -f "$SUPERPOWER_STATE_FILE"
+    prune_registry_path "$SUPERPOWER_STATE_FILE"
     exit 0
   fi
 fi

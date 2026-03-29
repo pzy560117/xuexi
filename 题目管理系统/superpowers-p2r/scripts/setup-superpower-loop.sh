@@ -223,6 +223,18 @@ started_at: "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 $PROMPT
 EOF
 
+# Register absolute state file path so stop-hook can recover even if
+# subsequent phases execute from a different working directory.
+STATE_FILE_ABS="$(cd "$STATE_DIR" && pwd)/$(basename "$STATE_FILE")"
+REGISTRY_DIR="${HOME}/.claude"
+REGISTRY_FILE="${REGISTRY_DIR}/superpower-loop-registry.txt"
+mkdir -p "$REGISTRY_DIR"
+touch "$REGISTRY_FILE"
+REGISTRY_TMP="${REGISTRY_FILE}.tmp.$$"
+grep -F -x -v "$STATE_FILE_ABS" "$REGISTRY_FILE" > "$REGISTRY_TMP" || true
+echo "$STATE_FILE_ABS" >> "$REGISTRY_TMP"
+mv "$REGISTRY_TMP" "$REGISTRY_FILE"
+
 # Write a bootstrap confirmation artifact for troubleshooting and audits.
 # Keep it beside the state file so custom --state-file stays self-contained.
 BOOTSTRAP_FILE="${STATE_DIR}/superpower-loop.bootstrap.md"

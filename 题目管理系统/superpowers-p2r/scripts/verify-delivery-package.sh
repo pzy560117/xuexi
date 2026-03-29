@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+set -u
+
 # Validate CLI arguments and assign defaults.
 parse_args() {
   WORKSPACE_DIR="$PWD"
@@ -47,7 +49,7 @@ parse_args() {
   fi
 
   if [ -z "$REPORT_FILE" ]; then
-    REPORT_FILE="$PACKAGE_DIR/delivery-check-report.md"
+    REPORT_FILE="$PACKAGE_DIR/docs/delivery-check-report.md"
   fi
 
   return 0
@@ -126,81 +128,6 @@ check_repo_core_files() {
   fi
 }
 
-# Enforce gate artifacts and hardened test execution scripts.
-check_gate_artifacts() {
-  local repo_dir="$PACKAGE_DIR/repo"
-  local docs_dir="$PACKAGE_DIR/docs"
-  local min_unit_files="${MIN_UNIT_TEST_FILES:-3}"
-  local min_api_files="${MIN_API_TEST_FILES:-3}"
-
-  if [ ! -d "$repo_dir/unit_tests" ]; then
-    fail_check "Missing test directory: repo/unit_tests"
-  else
-    pass_check "repo/unit_tests exists"
-  fi
-
-  if [ ! -d "$repo_dir/API_tests" ]; then
-    fail_check "Missing test directory: repo/API_tests"
-  else
-    pass_check "repo/API_tests exists"
-  fi
-
-  local unit_count=0
-  local api_count=0
-  unit_count=$(find "$repo_dir/unit_tests" -type f \( -name 'test_*.py' -o -name '*.test.js' -o -name '*.test.ts' -o -name '*.spec.js' -o -name '*.spec.ts' \) 2>/dev/null | wc -l | tr -d ' ')
-  api_count=$(find "$repo_dir/API_tests" -type f \( -name 'test_*.py' -o -name '*.test.js' -o -name '*.test.ts' -o -name '*.spec.js' -o -name '*.spec.ts' \) 2>/dev/null | wc -l | tr -d ' ')
-
-  if [ "$unit_count" -lt "$min_unit_files" ]; then
-    fail_check "Unit test files too few: $unit_count (required >= $min_unit_files)"
-  else
-    pass_check "Unit test file count is sufficient: $unit_count"
-  fi
-
-  if [ "$api_count" -lt "$min_api_files" ]; then
-    fail_check "API test files too few: $api_count (required >= $min_api_files)"
-  else
-    pass_check "API test file count is sufficient: $api_count"
-  fi
-
-  if [ -f "$repo_dir/run_tests.sh" ]; then
-    if grep -Eq '\|\|\s*echo|may have failed - this is expected' "$repo_dir/run_tests.sh"; then
-      fail_check "run_tests.sh is not fail-fast (contains failure-swallow pattern)"
-    else
-      pass_check "run_tests.sh fail-fast check passed"
-    fi
-  fi
-
-  if [ -f "$repo_dir/run_tests.bat" ]; then
-    if grep -Ei '\|\|\s*echo|may have failed - this is expected' "$repo_dir/run_tests.bat" >/dev/null 2>&1; then
-      fail_check "run_tests.bat is not fail-fast (contains failure-swallow pattern)"
-    else
-      pass_check "run_tests.bat fail-fast check passed"
-    fi
-  fi
-
-  local gate_reports=(
-    "test-gate-report.md"
-    "runtime-smoke-report.md"
-    "stability-loop-report.md"
-    "coverage-gate-report.md"
-    "policy-gate-report.md"
-  )
-
-  local report=""
-  for report in "${gate_reports[@]}"; do
-    if [ ! -f "$docs_dir/$report" ]; then
-      fail_check "Missing docs/$report (quality gate evidence)"
-      continue
-    fi
-
-    if grep -Eq 'FAIL=0|FAIL: 0|FAIL\): 0|FAIL\] 0' "$docs_dir/$report"; then
-      pass_check "$report indicates zero FAIL"
-    else
-      warn_check "$report present but FAIL=0 pattern not found; review manually"
-    fi
-  done
-}
-
 # Ensure heavy artifacts and cache files are not shipped.
 check_forbidden_artifacts() {
   local repo_dir="$PACKAGE_DIR/repo"
@@ -241,28 +168,6 @@ check_forbidden_artifacts() {
   fi
 }
 
-# Check Chinese character leakage for English prompts.
-check_language_cleanliness() {
-  local repo_dir="$PACKAGE_DIR/repo"
-  if [ ! -d "$repo_dir" ]; then
-    fail_check "repo directory is missing; skipped language cleanliness scan"
-    ZH_HITS=""
-    return
-  fi
-  if command -v rg >/dev/null 2>&1; then
-    if rg -n --no-heading --pcre2 "[\x{4e00}-\x{9fff}]" "$repo_dir" >/tmp/delivery-check-zh.txt 2>/dev/null; then
-      fail_check "Chinese characters found in repo/ (see report appendix)"
-      ZH_HITS="$(head -n 20 /tmp/delivery-check-zh.txt 2>/dev/null)"
-    else
-      pass_check "No Chinese characters found in repo/"
-      ZH_HITS=""
-    fi
-  else
-    warn_check "rg is unavailable; skipped Chinese character scan"
-    ZH_HITS=""
-  fi
-}
-
 # Validate metadata fields needed by downstream automation.
 check_metadata_fields() {
   local metadata_file="$PACKAGE_DIR/metadata.json"
@@ -281,6 +186,8 @@ check_metadata_fields() {
 
   if [ ! -f "$metadata_file" ]; then
     fail_check "metadata.json is missing"
+    PROMPT_LANGUAGE=""
+    ENGLISH_MODE=0
     return
   fi
 
@@ -300,40 +207,178 @@ check_metadata_fields() {
       fi
     done
 
+    PROMPT_LANGUAGE="$(jq -r '.prompt_language // ""' "$metadata_file" 2>/dev/null | tr '[:upper:]' '[:lower:]')"
     if [ "$missing_required" -eq 0 ]; then
       pass_check "metadata.json required fields are valid"
     fi
+
+    if [ "$PROMPT_LANGUAGE" = "en" ] || [ "$PROMPT_LANGUAGE" = "english" ]; then
+      ENGLISH_MODE=1
+    else
+      ENGLISH_MODE=0
+    fi
   else
     warn_check "jq is unavailable; skipped metadata schema validation"
+    PROMPT_LANGUAGE=""
+    ENGLISH_MODE=0
   fi
 }
 
-# Validate docker compose file syntax and common warnings.
-check_docker_compose() {
+# Enforce Chinese character policy for English prompts across the whole package.
+check_language_cleanliness() {
+  if [ "$ENGLISH_MODE" -ne 1 ]; then
+    pass_check "Prompt language is not English; skip full-package Chinese scan"
+    ZH_HITS=""
+    return
+  fi
+
+  if command -v rg >/dev/null 2>&1; then
+    if rg -n --no-heading --pcre2 "[\x{4e00}-\x{9fff}]" "$PACKAGE_DIR" \
+      --glob '!.tmp/**' \
+      --glob '!.backup/**' \
+      --glob '!.git/**' \
+      --glob '!**/.git/**' \
+      >/tmp/delivery-check-zh.txt 2>/dev/null; then
+      fail_check "Chinese characters found in delivery package while prompt_language=en (see report appendix)"
+      ZH_HITS="$(head -n 40 /tmp/delivery-check-zh.txt 2>/dev/null)"
+    else
+      pass_check "No Chinese characters found in full delivery package"
+      ZH_HITS=""
+    fi
+  else
+    fail_check "rg is unavailable; cannot enforce English-redline scan"
+    ZH_HITS=""
+  fi
+}
+
+# Validate static package policy with official validator.
+check_validate_package() {
+  local validator_candidates=(
+    "$WORKSPACE_DIR/script/validate_package.py"
+    "$WORKSPACE_DIR/validate_package.py"
+  )
+  local validator_path=""
+  local candidate=""
+
+  for candidate in "${validator_candidates[@]}"; do
+    if [ -f "$candidate" ]; then
+      validator_path="$candidate"
+      break
+    fi
+  done
+
+  if [ -z "$validator_path" ]; then
+    VALIDATE_PACKAGE_EXIT_CODE=127
+    fail_check "validate_package.py not found (expected at script/validate_package.py)"
+    VALIDATE_PACKAGE_LOG="validator script not found"
+    return
+  fi
+
+  if ! command -v python >/dev/null 2>&1; then
+    VALIDATE_PACKAGE_EXIT_CODE=127
+    fail_check "python command not available; cannot run validate_package.py"
+    VALIDATE_PACKAGE_LOG="python not found"
+    return
+  fi
+
+  VALIDATE_PACKAGE_LOG="$(python "$validator_path" "$PACKAGE_DIR" 2>&1)"
+  VALIDATE_PACKAGE_EXIT_CODE=$?
+
+  if [ "$VALIDATE_PACKAGE_EXIT_CODE" -eq 0 ]; then
+    pass_check "validate_package.py passed"
+  else
+    fail_check "validate_package.py failed with exit code $VALIDATE_PACKAGE_EXIT_CODE"
+  fi
+}
+
+# Validate docker compose config + runtime startup.
+check_docker_runtime() {
   local repo_dir="$PACKAGE_DIR/repo"
+
+  DOCKER_CONFIG_EXIT_CODE=127
+  DOCKER_UP_EXIT_CODE=127
+  DOCKER_DOWN_EXIT_CODE=127
+
   if [ ! -d "$repo_dir" ]; then
-    fail_check "repo directory is missing; skipped docker compose validation"
+    fail_check "repo directory is missing; skipped docker validation"
+    DOCKER_LOG="repo directory missing"
     return
   fi
+
+  if [ ! -f "$repo_dir/docker-compose.yml" ]; then
+    fail_check "repo/docker-compose.yml missing; cannot run docker checks"
+    DOCKER_LOG="docker-compose.yml missing"
+    return
+  fi
+
   if ! command -v docker >/dev/null 2>&1; then
-    warn_check "docker not available; skipped docker compose validation"
+    fail_check "docker is unavailable; strict delivery check requires docker"
+    DOCKER_LOG="docker not found"
     return
   fi
 
-  local compose_log=""
-  compose_log="$(cd "$repo_dir" && docker compose -f docker-compose.yml config -q 2>&1)"
-  local compose_code=$?
-  if [ "$compose_code" -ne 0 ]; then
-    fail_check "docker compose config failed"
-    COMPOSE_LOG="$compose_log"
+  local config_log=""
+  local up_log=""
+  local down_log=""
+
+  config_log="$(cd "$repo_dir" && docker compose -f docker-compose.yml config -q 2>&1)"
+  DOCKER_CONFIG_EXIT_CODE=$?
+  if [ "$DOCKER_CONFIG_EXIT_CODE" -eq 0 ]; then
+    pass_check "docker compose config --quiet passed"
+  else
+    fail_check "docker compose config --quiet failed (exit=$DOCKER_CONFIG_EXIT_CODE)"
+  fi
+
+  up_log="$(cd "$repo_dir" && docker compose -f docker-compose.yml up -d 2>&1)"
+  DOCKER_UP_EXIT_CODE=$?
+  if [ "$DOCKER_UP_EXIT_CODE" -eq 0 ]; then
+    pass_check "docker compose up -d passed"
+  else
+    fail_check "docker compose up -d failed (exit=$DOCKER_UP_EXIT_CODE)"
+  fi
+
+  down_log="$(cd "$repo_dir" && docker compose -f docker-compose.yml down --remove-orphans 2>&1)"
+  DOCKER_DOWN_EXIT_CODE=$?
+  if [ "$DOCKER_DOWN_EXIT_CODE" -eq 0 ]; then
+    pass_check "docker compose down --remove-orphans passed"
+  else
+    fail_check "docker compose down --remove-orphans failed (exit=$DOCKER_DOWN_EXIT_CODE)"
+  fi
+
+  DOCKER_LOG="[docker compose config -q]\n${config_log}\n\n[docker compose up -d]\n${up_log}\n\n[docker compose down --remove-orphans]\n${down_log}"
+}
+
+# Execute unified tests from packaged repo.
+check_run_tests() {
+  local repo_dir="$PACKAGE_DIR/repo"
+  RUN_TESTS_EXIT_CODE=127
+
+  if [ ! -d "$repo_dir" ]; then
+    fail_check "repo directory is missing; skipped run_tests execution"
+    RUN_TESTS_LOG="repo directory missing"
     return
   fi
 
-  pass_check "docker compose config passed"
-  COMPOSE_LOG="$compose_log"
+  if [ -f "$repo_dir/run_tests.sh" ]; then
+    RUN_TESTS_LOG="$(cd "$repo_dir" && bash ./run_tests.sh 2>&1)"
+    RUN_TESTS_EXIT_CODE=$?
+  elif [ -f "$repo_dir/run_tests.bat" ]; then
+    if command -v cmd.exe >/dev/null 2>&1; then
+      RUN_TESTS_LOG="$(cd "$repo_dir" && cmd.exe /c run_tests.bat 2>&1)"
+      RUN_TESTS_EXIT_CODE=$?
+    else
+      RUN_TESTS_LOG="run_tests.bat exists but cmd.exe is unavailable"
+      RUN_TESTS_EXIT_CODE=127
+    fi
+  else
+    RUN_TESTS_LOG="run_tests.sh and run_tests.bat are both missing"
+    RUN_TESTS_EXIT_CODE=127
+  fi
 
-  if echo "$compose_log" | grep -q "attribute \`version\` is obsolete"; then
-    warn_check "docker-compose.yml contains obsolete 'version' field"
+  if [ "$RUN_TESTS_EXIT_CODE" -eq 0 ]; then
+    pass_check "run_tests script execution passed"
+  else
+    fail_check "run_tests script execution failed (exit=$RUN_TESTS_EXIT_CODE)"
   fi
 }
 
@@ -349,7 +394,7 @@ check_placeholder_secrets() {
     local pattern='(your-super-secret-key-change-in-production|POSTGRES_PASSWORD:\s*postgres|MYSQL_ROOT_PASSWORD:\s*rootpassword|MYSQL_PASSWORD:\s*petpassword|defaultSecretKeyForDevelopmentOnly)'
     if rg -n --no-heading --pcre2 "$pattern" "$repo_dir" >/tmp/delivery-check-secret.txt 2>/dev/null; then
       warn_check "Placeholder/default secret values detected (see report appendix)"
-      SECRET_HITS="$(head -n 20 /tmp/delivery-check-secret.txt 2>/dev/null)"
+      SECRET_HITS="$(head -n 40 /tmp/delivery-check-secret.txt 2>/dev/null)"
     else
       pass_check "No placeholder/default secrets detected"
       SECRET_HITS=""
@@ -380,6 +425,8 @@ write_report() {
   local now=""
   now="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
+  mkdir -p "$(dirname "$REPORT_FILE")"
+
   {
     echo "# Delivery Check Report"
     echo
@@ -387,31 +434,60 @@ write_report() {
     echo "- Generated At (UTC): \`$now\`"
     echo "- Result: PASS=$PASS_COUNT, WARN=$WARN_COUNT, FAIL=$FAIL_COUNT"
     echo
+    echo "## Hard Evidence"
+    echo
+    echo "- VALIDATE_PACKAGE_EXIT_CODE: ${VALIDATE_PACKAGE_EXIT_CODE}"
+    echo "- DOCKER_CONFIG_EXIT_CODE: ${DOCKER_CONFIG_EXIT_CODE}"
+    echo "- DOCKER_UP_EXIT_CODE: ${DOCKER_UP_EXIT_CODE}"
+    echo "- DOCKER_DOWN_EXIT_CODE: ${DOCKER_DOWN_EXIT_CODE}"
+    echo "- RUN_TESTS_EXIT_CODE: ${RUN_TESTS_EXIT_CODE}"
+    echo
     echo "## Checks"
     echo
     printf "%s" "$REPORT_LINES"
+
     if [ -n "${ZH_HITS:-}" ]; then
       echo
-      echo "## Chinese Character Hits (Top 20)"
+      echo "## Chinese Character Hits (Top 40)"
       echo
       echo '```text'
       echo "$ZH_HITS"
       echo '```'
     fi
+
     if [ -n "${SECRET_HITS:-}" ]; then
       echo
-      echo "## Placeholder Secret Hits (Top 20)"
+      echo "## Placeholder Secret Hits (Top 40)"
       echo
       echo '```text'
       echo "$SECRET_HITS"
       echo '```'
     fi
-    if [ -n "${COMPOSE_LOG:-}" ]; then
+
+    if [ -n "${VALIDATE_PACKAGE_LOG:-}" ]; then
       echo
-      echo "## Docker Compose Output"
+      echo "## validate_package.py Output"
       echo
       echo '```text'
-      echo "$COMPOSE_LOG"
+      echo "$VALIDATE_PACKAGE_LOG"
+      echo '```'
+    fi
+
+    if [ -n "${DOCKER_LOG:-}" ]; then
+      echo
+      echo "## Docker Output"
+      echo
+      echo '```text'
+      echo "$DOCKER_LOG"
+      echo '```'
+    fi
+
+    if [ -n "${RUN_TESTS_LOG:-}" ]; then
+      echo
+      echo "## run_tests Output"
+      echo
+      echo '```text'
+      echo "$RUN_TESTS_LOG"
       echo '```'
     fi
   } >"$REPORT_FILE"
@@ -424,17 +500,30 @@ main() {
   REPORT_LINES=""
   ZH_HITS=""
   SECRET_HITS=""
-  COMPOSE_LOG=""
+
+  PROMPT_LANGUAGE=""
+  ENGLISH_MODE=0
+
+  VALIDATE_PACKAGE_EXIT_CODE=127
+  DOCKER_CONFIG_EXIT_CODE=127
+  DOCKER_UP_EXIT_CODE=127
+  DOCKER_DOWN_EXIT_CODE=127
+  RUN_TESTS_EXIT_CODE=127
+
+  VALIDATE_PACKAGE_LOG=""
+  DOCKER_LOG=""
+  RUN_TESTS_LOG=""
 
   parse_args "$@" || exit 2
 
   check_required_structure
   check_repo_core_files
-  check_gate_artifacts
   check_forbidden_artifacts
-  check_language_cleanliness
   check_metadata_fields
-  check_docker_compose
+  check_language_cleanliness
+  check_validate_package
+  check_docker_runtime
+  check_run_tests
   check_placeholder_secrets
   check_sessions_artifacts
 

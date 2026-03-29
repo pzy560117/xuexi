@@ -97,19 +97,22 @@ PHASE_NAMES=(
   "prompt-parser" "spec-gateway" "writing-plans-p2r" "consistency-gate"
   "executing-plans-p2r" "domain-checklist" "self-review" "llm-test-iteration-1"
   "llm-test-iteration-2" "llm-test-iteration-3" "llm-triple-check-gate"
-  "delivery-packager" "delivery-checker"
+  "delivery-packager" "post-package-test-iteration-1" "post-package-test-iteration-2"
+  "post-package-test-iteration-3" "post-package-triple-check-gate" "delivery-checker"
 )
 PHASE_PROMISES=(
   "PROMPT_PARSING_COMPLETE" "SPEC_COMPLETE" "PLANNING_COMPLETE" "ANALYSIS_COMPLETE"
   "EXECUTION_COMPLETE" "CHECKLIST_COMPLETE" "SELF_REVIEW_COMPLETE" "LLM_TEST_R1_COMPLETE"
   "LLM_TEST_R2_COMPLETE" "LLM_TEST_R3_COMPLETE" "LLM_TRIPLE_CHECK_COMPLETE"
-  "PACKAGE_COMPLETE" "DELIVERY_COMPLETE"
+  "PACKAGE_COMPLETE" "POST_PACKAGE_TEST_R1_COMPLETE" "POST_PACKAGE_TEST_R2_COMPLETE"
+  "POST_PACKAGE_TEST_R3_COMPLETE" "POST_PACKAGE_TRIPLE_CHECK_COMPLETE" "DELIVERY_COMPLETE"
 )
 PHASE_SKIPPABLE=(
   "no" "yes" "no" "yes"
   "no" "yes" "yes" "no"
   "no" "no" "no"
-  "yes" "yes"
+  "yes" "no" "no"
+  "no" "no" "no"
 )
 
 phase_index_from_name() {
@@ -132,7 +135,11 @@ phase_index_from_name() {
     "llm-test-iteration-3"|"llm test iteration 3"|"stability-loop"|"stability loop") echo 9 ;;
     "llm-triple-check-gate"|"llm triple check gate"|"coverage-gate"|"coverage gate"|"policy-gate"|"policy gate") echo 10 ;;
     "delivery-packager"|"delivery packager") echo 11 ;;
-    "delivery-checker"|"delivery checker") echo 12 ;;
+    "post-package-test-iteration-1"|"post package test iteration 1"|"post-package-r1"|"post package r1") echo 12 ;;
+    "post-package-test-iteration-2"|"post package test iteration 2"|"post-package-r2"|"post package r2") echo 13 ;;
+    "post-package-test-iteration-3"|"post package test iteration 3"|"post-package-r3"|"post package r3") echo 14 ;;
+    "post-package-triple-check-gate"|"post package triple check gate"|"post-package-gate"|"post package gate") echo 15 ;;
+    "delivery-checker"|"delivery checker") echo 16 ;;
     *)
       return 1
       ;;
@@ -270,7 +277,11 @@ recover_state_from_legacy_status_markdown() {
     "Phase 3.7 (stability-loop)"|"Phase 3.7 (llm-test-iteration-3)") phase_idx=9 ;;
     "Phase 3.8 (coverage-gate)"|"Phase 3.9 (policy-gate)"|"Phase 3.8 (llm-triple-check-gate)") phase_idx=10 ;;
     "Phase 4 (delivery-packager)") phase_idx=11 ;;
-    "Phase 4.5 (delivery-checker)") phase_idx=12 ;;
+    "Phase 4.1 (post-package-test-iteration-1)") phase_idx=12 ;;
+    "Phase 4.2 (post-package-test-iteration-2)") phase_idx=13 ;;
+    "Phase 4.3 (post-package-test-iteration-3)") phase_idx=14 ;;
+    "Phase 4.4 (post-package-triple-check-gate)") phase_idx=15 ;;
+    "Phase 4.5 (delivery-checker)") phase_idx=16 ;;
     *) return 1 ;;
   esac
   local state_path="$SUPERPOWER_STATE_FILE"
@@ -628,7 +639,11 @@ phase_label_from_index() {
     9) echo "Phase 3.7" ;;
     10) echo "Phase 3.8" ;;
     11) echo "Phase 4" ;;
-    12) echo "Phase 4.5" ;;
+    12) echo "Phase 4.1" ;;
+    13) echo "Phase 4.2" ;;
+    14) echo "Phase 4.3" ;;
+    15) echo "Phase 4.4" ;;
+    16) echo "Phase 4.5" ;;
     *) echo "" ;;
   esac
 }
@@ -655,6 +670,31 @@ subagent_report_evidence_ok() {
     return 0
   fi
   return 1
+}
+
+# Validate report explicitly covers docs-defined acceptance checks.
+docs_acceptance_evidence_ok() {
+  local report_file="$1"
+  [[ -f "$report_file" ]] || return 1
+  grep -Eiq 'validate_package\.py' "$report_file" || return 1
+  grep -Eiq 'docker compose (config|up)' "$report_file" || return 1
+  grep -Eiq 'run_tests\.(sh|bat)' "$report_file" || return 1
+  grep -Eiq 'unit_tests' "$report_file" || return 1
+  grep -Eiq 'API_tests' "$report_file" || return 1
+  grep -Eiq 'VALIDATE_PACKAGE_EXIT_CODE:[[:space:]]*0' "$report_file" || return 1
+  grep -Eiq 'DOCKER_UP_EXIT_CODE:[[:space:]]*0' "$report_file" || return 1
+  grep -Eiq 'RUN_TESTS_EXIT_CODE:[[:space:]]*0' "$report_file" || return 1
+  return 0
+}
+
+delivery_checker_report_ok() {
+  local report_file="$1"
+  [[ -f "$report_file" ]] || return 1
+  grep -Eiq 'FAIL[=:][[:space:]]*0|FAIL\)[[:space:]]*:?[[:space:]]*0' "$report_file" || return 1
+  grep -Eiq 'VALIDATE_PACKAGE_EXIT_CODE:[[:space:]]*0' "$report_file" || return 1
+  grep -Eiq 'DOCKER_UP_EXIT_CODE:[[:space:]]*0' "$report_file" || return 1
+  grep -Eiq 'RUN_TESTS_EXIT_CODE:[[:space:]]*0' "$report_file" || return 1
+  return 0
 }
 
 phase_artifacts_ok() {
@@ -728,11 +768,43 @@ phase_artifacts_ok() {
       [[ -n "$d" && -d "$d/repo" ]] || missing+=("TASK-*/repo")
       [[ -n "$d" && -f "$d/metadata.json" ]] || missing+=("TASK-*/metadata.json")
       ;;
+    "post-package-test-iteration-1")
+      [[ -f ".tmp/post-package-r1-main.md" ]] || missing+=(".tmp/post-package-r1-main.md")
+      [[ -f ".tmp/post-package-r1-subagent.md" ]] || missing+=(".tmp/post-package-r1-subagent.md")
+      report_pass_marker_ok ".tmp/post-package-r1-main.md" || missing+=(".tmp/post-package-r1-main.md(FINAL_VERDICT: PASS)")
+      report_pass_marker_ok ".tmp/post-package-r1-subagent.md" || missing+=(".tmp/post-package-r1-subagent.md(FINAL_VERDICT: PASS)")
+      subagent_report_evidence_ok ".tmp/post-package-r1-subagent.md" || missing+=(".tmp/post-package-r1-subagent.md(SUBAGENT_ID)")
+      docs_acceptance_evidence_ok ".tmp/post-package-r1-main.md" || missing+=(".tmp/post-package-r1-main.md(docs-acceptance-evidence)")
+      docs_acceptance_evidence_ok ".tmp/post-package-r1-subagent.md" || missing+=(".tmp/post-package-r1-subagent.md(docs-acceptance-evidence)")
+      ;;
+    "post-package-test-iteration-2")
+      [[ -f ".tmp/post-package-r2-main.md" ]] || missing+=(".tmp/post-package-r2-main.md")
+      [[ -f ".tmp/post-package-r2-subagent.md" ]] || missing+=(".tmp/post-package-r2-subagent.md")
+      report_pass_marker_ok ".tmp/post-package-r2-main.md" || missing+=(".tmp/post-package-r2-main.md(FINAL_VERDICT: PASS)")
+      report_pass_marker_ok ".tmp/post-package-r2-subagent.md" || missing+=(".tmp/post-package-r2-subagent.md(FINAL_VERDICT: PASS)")
+      subagent_report_evidence_ok ".tmp/post-package-r2-subagent.md" || missing+=(".tmp/post-package-r2-subagent.md(SUBAGENT_ID)")
+      docs_acceptance_evidence_ok ".tmp/post-package-r2-main.md" || missing+=(".tmp/post-package-r2-main.md(docs-acceptance-evidence)")
+      docs_acceptance_evidence_ok ".tmp/post-package-r2-subagent.md" || missing+=(".tmp/post-package-r2-subagent.md(docs-acceptance-evidence)")
+      ;;
+    "post-package-test-iteration-3")
+      [[ -f ".tmp/post-package-r3-main.md" ]] || missing+=(".tmp/post-package-r3-main.md")
+      [[ -f ".tmp/post-package-r3-subagent.md" ]] || missing+=(".tmp/post-package-r3-subagent.md")
+      report_pass_marker_ok ".tmp/post-package-r3-main.md" || missing+=(".tmp/post-package-r3-main.md(FINAL_VERDICT: PASS)")
+      report_pass_marker_ok ".tmp/post-package-r3-subagent.md" || missing+=(".tmp/post-package-r3-subagent.md(FINAL_VERDICT: PASS)")
+      subagent_report_evidence_ok ".tmp/post-package-r3-subagent.md" || missing+=(".tmp/post-package-r3-subagent.md(SUBAGENT_ID)")
+      docs_acceptance_evidence_ok ".tmp/post-package-r3-main.md" || missing+=(".tmp/post-package-r3-main.md(docs-acceptance-evidence)")
+      docs_acceptance_evidence_ok ".tmp/post-package-r3-subagent.md" || missing+=(".tmp/post-package-r3-subagent.md(docs-acceptance-evidence)")
+      ;;
+    "post-package-triple-check-gate")
+      [[ -f ".tmp/post-package-triple-check-gate.md" ]] || missing+=(".tmp/post-package-triple-check-gate.md")
+      report_pass_marker_ok ".tmp/post-package-triple-check-gate.md" || missing+=(".tmp/post-package-triple-check-gate.md(FINAL_VERDICT: PASS)")
+      ;;
     "delivery-checker")
       local d2
       d2="$(latest_task_dir)"
       [[ -n "$d2" ]] || missing+=("TASK-*")
-      [[ -n "$d2" && -f "$d2/delivery-check-report.md" ]] || missing+=("TASK-*/delivery-check-report.md")
+      [[ -n "$d2" && -f "$d2/docs/delivery-check-report.md" ]] || missing+=("TASK-*/docs/delivery-check-report.md")
+      delivery_checker_report_ok "$d2/docs/delivery-check-report.md" || missing+=("TASK-*/docs/delivery-check-report.md(FAIL=0 + hard-evidence)")
       ;;
     *)
       ;;
@@ -800,6 +872,81 @@ AUTO-REPAIR PLAN (Phase 3.8):
 3) Regenerate .tmp/llm-triple-check-gate.md with:
    FINAL_VERDICT: PASS
 4) Do NOT ask user for confirmation; repair and retry now.
+EOF
+      ;;
+    "post-package-test-iteration-1")
+      cat <<'EOF'
+AUTO-REPAIR PLAN (Phase 4.1):
+1) Re-enter packaged directory and redeploy from TASK-*/repo.
+2) Re-run docs-required checks:
+   - python script/validate_package.py TASK-*
+   - docker compose up / down
+   - run_tests.sh or run_tests.bat
+3) Regenerate:
+   - .tmp/post-package-r1-main.md
+   - .tmp/post-package-r1-subagent.md
+4) Keep evidence keywords in both reports:
+   validate_package.py, docker compose, run_tests.sh|run_tests.bat, unit_tests, API_tests
+5) Both reports must include hard evidence lines:
+   VALIDATE_PACKAGE_EXIT_CODE: 0
+   DOCKER_UP_EXIT_CODE: 0
+   RUN_TESTS_EXIT_CODE: 0
+6) Both reports must include FINAL_VERDICT: PASS; subagent report must include SUBAGENT_ID.
+EOF
+      ;;
+    "post-package-test-iteration-2")
+      cat <<'EOF'
+AUTO-REPAIR PLAN (Phase 4.2):
+1) Clean/restart environment then redeploy packaged repo again.
+2) Re-run docs-required checks and regenerate:
+   - .tmp/post-package-r2-main.md
+   - .tmp/post-package-r2-subagent.md
+3) Keep evidence keywords in both reports:
+   validate_package.py, docker compose, run_tests.sh|run_tests.bat, unit_tests, API_tests
+4) Both reports must include hard evidence lines:
+   VALIDATE_PACKAGE_EXIT_CODE: 0
+   DOCKER_UP_EXIT_CODE: 0
+   RUN_TESTS_EXIT_CODE: 0
+5) Both reports must include FINAL_VERDICT: PASS; subagent report must include SUBAGENT_ID.
+EOF
+      ;;
+    "post-package-test-iteration-3")
+      cat <<'EOF'
+AUTO-REPAIR PLAN (Phase 4.3):
+1) Re-run packaged deployment/tests with shuffled order + boundary checks.
+2) Regenerate:
+   - .tmp/post-package-r3-main.md
+   - .tmp/post-package-r3-subagent.md
+3) Keep evidence keywords in both reports:
+   validate_package.py, docker compose, run_tests.sh|run_tests.bat, unit_tests, API_tests
+4) Both reports must include hard evidence lines:
+   VALIDATE_PACKAGE_EXIT_CODE: 0
+   DOCKER_UP_EXIT_CODE: 0
+   RUN_TESTS_EXIT_CODE: 0
+5) Both reports must include FINAL_VERDICT: PASS; subagent report must include SUBAGENT_ID.
+EOF
+      ;;
+    "post-package-triple-check-gate")
+      cat <<'EOF'
+AUTO-REPAIR PLAN (Phase 4.4):
+1) Re-read all 6 post-package reports (R1/R2/R3 main+subagent).
+2) Require each report to contain hard evidence lines with zero exit codes:
+   VALIDATE_PACKAGE_EXIT_CODE: 0 / DOCKER_UP_EXIT_CODE: 0 / RUN_TESTS_EXIT_CODE: 0
+3) If any round is FAIL or missing evidence, return to that round and rerun.
+4) Regenerate .tmp/post-package-triple-check-gate.md with FINAL_VERDICT: PASS.
+EOF
+      ;;
+    "delivery-checker")
+      cat <<'EOF'
+AUTO-REPAIR PLAN (Phase 4.5):
+1) Run ${CLAUDE_PLUGIN_ROOT}/scripts/verify-delivery-package.sh against latest TASK-*.
+2) Ensure report exists at TASK-*/docs/delivery-check-report.md.
+3) Verify report has FAIL=0 and hard evidence lines:
+   VALIDATE_PACKAGE_EXIT_CODE: 0
+   DOCKER_UP_EXIT_CODE: 0
+   RUN_TESTS_EXIT_CODE: 0
+4) If not satisfied, fix issues and rerun delivery-checker in current phase.
+5) Do NOT ask user for confirmation; repair and retry now.
 EOF
       ;;
     *)

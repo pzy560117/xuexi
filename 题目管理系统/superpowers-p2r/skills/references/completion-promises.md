@@ -43,6 +43,10 @@ A completion promise should name a **state** that is objectively true or false, 
 | `superpowers:llm-test-iteration-2` | `LLM_TEST_R2_COMPLETE` | Round 2 main + subagent reports are both PASS |
 | `superpowers:llm-test-iteration-3` | `LLM_TEST_R3_COMPLETE` | Round 3 main + subagent reports are both PASS |
 | `superpowers:llm-triple-check-gate` | `LLM_TRIPLE_CHECK_COMPLETE` | Three rounds (6 reports) are consistent and all PASS |
+| `superpowers:post-package-test-iteration-1` | `POST_PACKAGE_TEST_R1_COMPLETE` | Post-package redeploy/test round 1 main + subagent reports are both PASS |
+| `superpowers:post-package-test-iteration-2` | `POST_PACKAGE_TEST_R2_COMPLETE` | Post-package redeploy/test round 2 main + subagent reports are both PASS |
+| `superpowers:post-package-test-iteration-3` | `POST_PACKAGE_TEST_R3_COMPLETE` | Post-package redeploy/test round 3 main + subagent reports are both PASS |
+| `superpowers:post-package-triple-check-gate` | `POST_PACKAGE_TRIPLE_CHECK_COMPLETE` | Post-package three rounds (6 reports) are consistent and all PASS |
 | `superpowers:test-gate` | `TEST_GATE_COMPLETE` | Legacy script-based strict test gate passed |
 | `superpowers:runtime-smoke` | `RUNTIME_SMOKE_COMPLETE` | Legacy script-based runtime smoke passed |
 | `superpowers:stability-loop` | `STABILITY_COMPLETE` | Legacy script-based stability loop passed |

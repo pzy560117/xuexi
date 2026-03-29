@@ -45,6 +45,220 @@ prune_registry_path() {
   mv "$tmp" "$REGISTRY_FILE"
 }
 
+# Scope registry fallback candidates to current workspace, preventing
+# cross-project hijacking when multiple loop states exist globally.
+workspace_match_candidate() {
+  local candidate="$1"
+  [[ -n "$candidate" ]] || return 1
+  local candidate_abs="$candidate"
+  if command -v cygpath >/dev/null 2>&1; then
+    case "$candidate_abs" in
+      [A-Za-z]:\\*)
+        candidate_abs="$(cygpath "$candidate_abs")"
+        ;;
+    esac
+  fi
+  [[ -f "$candidate_abs" ]] || return 1
+  candidate_abs="$(cd "$(dirname "$candidate_abs")" && pwd)/$(basename "$candidate_abs")"
+
+  local project_root="$candidate_abs"
+  case "$candidate_abs" in
+    */docs/runtime/superpower-loop*.local.md)
+      project_root="${candidate_abs%/docs/runtime/superpower-loop*.local.md}"
+      ;;
+    *)
+      project_root="$(cd "$(dirname "$candidate_abs")" && pwd)"
+      ;;
+  esac
+
+  local cwd_abs
+  cwd_abs="$(pwd -P)"
+  if [[ "$cwd_abs" == "$project_root"* ]] || [[ "$project_root" == "$cwd_abs"* ]]; then
+    return 0
+  fi
+  return 1
+}
+
+# Register absolute state path into registry (idempotent).
+register_registry_path() {
+  local target="$1"
+  [[ -n "$target" ]] || return 0
+  local registry_dir
+  registry_dir="$(dirname "$REGISTRY_FILE")"
+  mkdir -p "$registry_dir"
+  touch "$REGISTRY_FILE"
+  local tmp="${REGISTRY_FILE}.tmp.$$"
+  grep -F -x -v "$target" "$REGISTRY_FILE" > "$tmp" || true
+  echo "$target" >> "$tmp"
+  mv "$tmp" "$REGISTRY_FILE"
+}
+
+# Recovery path:
+# If Phase 0 has completed but loop state is missing (bootstrap not persisted),
+# reconstruct a canonical prompt2repo loop state so stop-hook can continue Phase 0.5.
+recover_state_from_phase0_completion() {
+  local last_output="$1"
+  local marker
+  marker="$(printf '%s\n' "$last_output" | awk 'NF{line=$0} END{print line}' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+  if [[ "$marker" != "PROMPT_PARSING_COMPLETE" ]] && [[ "$marker" != "<promise>PROMPT_PARSING_COMPLETE</promise>" ]]; then
+    return 1
+  fi
+
+  # Guard: recover only when phase-0 artifacts exist in current project.
+  if [[ ! -f "docs/designs/requirement-analysis.md" ]]; then
+    return 1
+  fi
+
+  local recovered_state="docs/runtime/superpower-loop.local.md"
+  local recovered_dir
+  recovered_dir="$(dirname "$recovered_state")"
+  mkdir -p "$recovered_dir"
+
+  cat > "$recovered_state" <<EOF
+---
+active: true
+iteration: 1
+session_id: "${HOOK_SESSION}"
+max_iterations: 100
+completion_promise: "DELIVERY_COMPLETE"
+started_at: "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+current_phase: 1
+---
+
+# Superpower Loop State
+
+## Phases
+
+| # | Name | Status | Completion Promise | Skippable |
+|---|------|--------|-------------------|-----------|
+| 0 | prompt-parser | done | PROMPT_PARSING_COMPLETE | no |
+| 1 | spec-gateway | in_progress | SPEC_COMPLETE | yes |
+| 2 | writing-plans-p2r | pending | PLANNING_COMPLETE | no |
+| 3 | consistency-gate | pending | ANALYSIS_COMPLETE | yes |
+| 4 | executing-plans-p2r | pending | EXECUTION_COMPLETE | no |
+| 5 | domain-checklist | pending | CHECKLIST_COMPLETE | yes |
+| 6 | self-review | pending | SELF_REVIEW_COMPLETE | yes |
+| 7 | test-gate | pending | TEST_GATE_COMPLETE | yes |
+| 8 | runtime-smoke | pending | RUNTIME_SMOKE_COMPLETE | yes |
+| 9 | stability-loop | pending | STABILITY_COMPLETE | yes |
+| 10 | coverage-gate | pending | COVERAGE_COMPLETE | yes |
+| 11 | policy-gate | pending | POLICY_COMPLETE | yes |
+| 12 | delivery-packager | pending | PACKAGE_COMPLETE | yes |
+| 13 | delivery-checker | pending | DELIVERY_COMPLETE | yes |
+EOF
+
+  local bootstrap_file="${recovered_dir}/superpower-loop.bootstrap.md"
+  cat > "$bootstrap_file" <<EOF
+# Superpower Loop Bootstrap Confirmation (Auto-Recovered)
+
+- recovered_at_utc: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+- working_directory: $(pwd)
+- state_file: ${recovered_state}
+- source: stop-hook.sh
+- reason: missing loop state after Phase 0 completion marker
+EOF
+
+  local recovered_abs
+  recovered_abs="$(cd "$recovered_dir" && pwd)/$(basename "$recovered_state")"
+  register_registry_path "$recovered_abs"
+  SUPERPOWER_STATE_FILE="$recovered_state"
+  return 0
+}
+
+# Recovery path:
+# Some model turns may overwrite docs/runtime/superpower-loop.local.md with
+# human-readable markdown status (no YAML frontmatter). Rebuild canonical state.
+recover_state_from_legacy_status_markdown() {
+  local content="$1"
+  local legacy_phase
+  legacy_phase=$(printf '%s\n' "$content" | awk -F'|' '
+    /^\|/ {
+      col1=$2; col2=$3;
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", col1);
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", col2);
+      if (col1 ~ /^Phase / && toupper(col2)=="IN_PROGRESS") { print col1; exit }
+    }
+  ')
+  [[ -n "$legacy_phase" ]] || return 1
+
+  local phase_idx
+  case "$legacy_phase" in
+    "Phase 0 (prompt-parser)") phase_idx=0 ;;
+    "Phase 0.5 (spec-gateway)") phase_idx=1 ;;
+    "Phase 1 (writing-plans-p2r)") phase_idx=2 ;;
+    "Phase 1.5 (consistency-gate)") phase_idx=3 ;;
+    "Phase 2 (Implementation)"|"Phase 2 (executing-plans-p2r)") phase_idx=4 ;;
+    "Phase 2.5 (domain-checklist)") phase_idx=5 ;;
+    "Phase 3 (self-review)") phase_idx=6 ;;
+    "Phase 3.5 (test-gate)") phase_idx=7 ;;
+    "Phase 3.6 (runtime-smoke)") phase_idx=8 ;;
+    "Phase 3.7 (stability-loop)") phase_idx=9 ;;
+    "Phase 3.8 (coverage-gate)") phase_idx=10 ;;
+    "Phase 3.9 (policy-gate)") phase_idx=11 ;;
+    "Phase 4 (delivery-packager)") phase_idx=12 ;;
+    "Phase 4.5 (delivery-checker)") phase_idx=13 ;;
+    *) return 1 ;;
+  esac
+
+  local phase_names=(
+    "prompt-parser" "spec-gateway" "writing-plans-p2r" "consistency-gate"
+    "executing-plans-p2r" "domain-checklist" "self-review" "test-gate"
+    "runtime-smoke" "stability-loop" "coverage-gate" "policy-gate"
+    "delivery-packager" "delivery-checker"
+  )
+  local phase_promises=(
+    "PROMPT_PARSING_COMPLETE" "SPEC_COMPLETE" "PLANNING_COMPLETE" "ANALYSIS_COMPLETE"
+    "EXECUTION_COMPLETE" "CHECKLIST_COMPLETE" "SELF_REVIEW_COMPLETE" "TEST_GATE_COMPLETE"
+    "RUNTIME_SMOKE_COMPLETE" "STABILITY_COMPLETE" "COVERAGE_COMPLETE" "POLICY_COMPLETE"
+    "PACKAGE_COMPLETE" "DELIVERY_COMPLETE"
+  )
+  local phase_skippable=(
+    "no" "yes" "no" "yes"
+    "no" "yes" "yes" "yes"
+    "yes" "yes" "yes" "yes"
+    "yes" "yes"
+  )
+
+  local state_path="$SUPERPOWER_STATE_FILE"
+  local state_dir
+  state_dir="$(dirname "$state_path")"
+  mkdir -p "$state_dir"
+
+  {
+    echo "---"
+    echo "active: true"
+    echo "iteration: 1"
+    echo "session_id: \"${HOOK_SESSION}\""
+    echo "max_iterations: 100"
+    echo "completion_promise: \"DELIVERY_COMPLETE\""
+    echo "started_at: \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\""
+    echo "current_phase: ${phase_idx}"
+    echo "---"
+    echo
+    echo "# Superpower Loop State"
+    echo
+    echo "## Phases"
+    echo
+    echo "| # | Name | Status | Completion Promise | Skippable |"
+    echo "|---|------|--------|-------------------|-----------|"
+    local i
+    for i in "${!phase_names[@]}"; do
+      local status="pending"
+      if [[ "$i" -lt "$phase_idx" ]]; then
+        status="done"
+      elif [[ "$i" -eq "$phase_idx" ]]; then
+        status="in_progress"
+      fi
+      echo "| ${i} | ${phase_names[$i]} | ${status} | ${phase_promises[$i]} | ${phase_skippable[$i]} |"
+    done
+  } > "$state_path"
+
+  local recovered_abs
+  recovered_abs="$(cd "$state_dir" && pwd)/$(basename "$state_path")"
+  register_registry_path "$recovered_abs"
+  return 0
+}
+
 # Parse a candidate state file and match session ownership.
 inspect_candidate() {
   local candidate="$1"
@@ -89,6 +303,9 @@ if [[ -z "$SUPERPOWER_STATE_FILE" ]] && [[ -f "$REGISTRY_FILE" ]]; then
       prune_registry_path "$candidate"
       continue
     fi
+    if ! workspace_match_candidate "$candidate"; then
+      continue
+    fi
     if inspect_candidate "$candidate"; then
       break
     fi
@@ -102,18 +319,32 @@ if [[ -z "$SUPERPOWER_STATE_FILE" ]]; then
   if [[ ${#ALL_CANDIDATES[@]} -eq 1 ]]; then
     SUPERPOWER_STATE_FILE="${ALL_CANDIDATES[0]}"
   else
-    # No active loop for this session - allow exit
-    exit 0
+    LAST_OUTPUT_HINT=$(echo "$HOOK_INPUT" | jq -r '.last_assistant_message // ""')
+    if ! recover_state_from_phase0_completion "$LAST_OUTPUT_HINT"; then
+      # No active loop for this session - allow exit
+      exit 0
+    fi
   fi
 fi
 
 # Parse markdown frontmatter (YAML between ---) and extract values
 STATE_CONTENT=$(awk 'NR==1{sub(/^\xef\xbb\xbf/,"")} {print}' "$SUPERPOWER_STATE_FILE")
 FRONTMATTER=$(printf '%s\n' "$STATE_CONTENT" | sed -n '/^---$/,/^---$/{ /^---$/d; p; }')
-ITERATION=$(echo "$FRONTMATTER" | grep '^iteration:' | sed 's/iteration: *//')
-MAX_ITERATIONS=$(echo "$FRONTMATTER" | grep '^max_iterations:' | sed 's/max_iterations: *//')
+ITERATION=$(echo "$FRONTMATTER" | grep '^iteration:' | sed 's/iteration: *//' || true)
+MAX_ITERATIONS=$(echo "$FRONTMATTER" | grep '^max_iterations:' | sed 's/max_iterations: *//' || true)
 # Extract completion_promise and strip surrounding quotes if present
-COMPLETION_PROMISE=$(echo "$FRONTMATTER" | grep '^completion_promise:' | sed 's/completion_promise: *//' | sed 's/^"\(.*\)"$/\1/')
+COMPLETION_PROMISE=$(echo "$FRONTMATTER" | grep '^completion_promise:' | sed 's/completion_promise: *//' | sed 's/^"\(.*\)"$/\1/' || true)
+
+# If state file was overwritten into markdown report format, try recovery once.
+if [[ ! "$ITERATION" =~ ^[0-9]+$ ]] || [[ ! "$MAX_ITERATIONS" =~ ^[0-9]+$ ]]; then
+  if recover_state_from_legacy_status_markdown "$STATE_CONTENT"; then
+    STATE_CONTENT=$(awk 'NR==1{sub(/^\xef\xbb\xbf/,"")} {print}' "$SUPERPOWER_STATE_FILE")
+    FRONTMATTER=$(printf '%s\n' "$STATE_CONTENT" | sed -n '/^---$/,/^---$/{ /^---$/d; p; }')
+    ITERATION=$(echo "$FRONTMATTER" | grep '^iteration:' | sed 's/iteration: *//' || true)
+    MAX_ITERATIONS=$(echo "$FRONTMATTER" | grep '^max_iterations:' | sed 's/max_iterations: *//' || true)
+    COMPLETION_PROMISE=$(echo "$FRONTMATTER" | grep '^completion_promise:' | sed 's/completion_promise: *//' | sed 's/^"\(.*\)"$/\1/' || true)
+  fi
+fi
 
 # Validate numeric fields before arithmetic operations
 if [[ ! "$ITERATION" =~ ^[0-9]+$ ]]; then

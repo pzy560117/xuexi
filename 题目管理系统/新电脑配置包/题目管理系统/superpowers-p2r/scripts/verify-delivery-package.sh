@@ -128,6 +128,48 @@ check_repo_core_files() {
   fi
 }
 
+# Validate mandatory test directory structure and minimal test file counts.
+check_test_structure() {
+  local repo_dir="$PACKAGE_DIR/repo"
+  local unit_dir="$repo_dir/unit_tests"
+  local api_dir="$repo_dir/API_tests"
+  local min_unit_files="${MIN_UNIT_TEST_FILES:-1}"
+  local min_api_files="${MIN_API_TEST_FILES:-1}"
+
+  if [ ! -d "$unit_dir" ]; then
+    fail_check "Missing required test directory: repo/unit_tests"
+  else
+    pass_check "repo/unit_tests exists"
+  fi
+
+  if [ ! -d "$api_dir" ]; then
+    fail_check "Missing required test directory: repo/API_tests"
+  else
+    pass_check "repo/API_tests exists"
+  fi
+
+  local unit_count=0
+  local api_count=0
+  if [ -d "$unit_dir" ]; then
+    unit_count=$(find "$unit_dir" -type f \( -name 'test_*.py' -o -name '*.test.js' -o -name '*.test.ts' -o -name '*.spec.js' -o -name '*.spec.ts' \) 2>/dev/null | wc -l | tr -d ' ')
+  fi
+  if [ -d "$api_dir" ]; then
+    api_count=$(find "$api_dir" -type f \( -name 'test_*.py' -o -name '*.test.js' -o -name '*.test.ts' -o -name '*.spec.js' -o -name '*.spec.ts' \) 2>/dev/null | wc -l | tr -d ' ')
+  fi
+
+  if [ "$unit_count" -ge "$min_unit_files" ]; then
+    pass_check "unit_tests file count check passed: $unit_count >= $min_unit_files"
+  else
+    fail_check "unit_tests file count check failed: $unit_count < $min_unit_files"
+  fi
+
+  if [ "$api_count" -ge "$min_api_files" ]; then
+    pass_check "API_tests file count check passed: $api_count >= $min_api_files"
+  else
+    fail_check "API_tests file count check failed: $api_count < $min_api_files"
+  fi
+}
+
 # Ensure heavy artifacts and cache files are not shipped.
 check_forbidden_artifacts() {
   local repo_dir="$PACKAGE_DIR/repo"
@@ -518,6 +560,7 @@ main() {
 
   check_required_structure
   check_repo_core_files
+  check_test_structure
   check_forbidden_artifacts
   check_metadata_fields
   check_language_cleanliness

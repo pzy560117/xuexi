@@ -47,6 +47,7 @@ A completion promise should name a **state** that is objectively true or false, 
 | `superpowers:post-package-test-iteration-2` | `POST_PACKAGE_TEST_R2_COMPLETE` | Post-package redeploy/test round 2 main + subagent reports are both PASS |
 | `superpowers:post-package-test-iteration-3` | `POST_PACKAGE_TEST_R3_COMPLETE` | Post-package redeploy/test round 3 main + subagent reports are both PASS |
 | `superpowers:post-package-triple-check-gate` | `POST_PACKAGE_TRIPLE_CHECK_COMPLETE` | Post-package three rounds (6 reports) are consistent and all PASS |
+| `superpowers:artifact-truth-gate` | `ARTIFACT_TRUTH_COMPLETE` | Post-package reports match real filesystem truth (`unit_tests` and `API_tests` exist) |
 | `superpowers:test-gate` | `TEST_GATE_COMPLETE` | Legacy script-based strict test gate passed |
 | `superpowers:runtime-smoke` | `RUNTIME_SMOKE_COMPLETE` | Legacy script-based runtime smoke passed |
 | `superpowers:stability-loop` | `STABILITY_COMPLETE` | Legacy script-based stability loop passed |

@@ -1,12 +1,12 @@
 ---
 name: delivery-checker
-description: "Prompt2Repo Phase 4.5: 对 TASK 交付包执行最终自动验收，强制校验 validate_package + docker up + run_tests 硬证据"
+description: "Prompt2Repo Phase 4.6: 对 TASK 交付包执行最终自动验收，强制校验 validate_package + docker up + run_tests 硬证据"
 argument-hint: [--task-id]
 user-invocable: false
 allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/scripts/verify-delivery-package.sh:*)"]
 ---
 
-# Delivery Checker — Prompt2Repo Phase 4.5
+# Delivery Checker — Prompt2Repo Phase 4.6
 
 ## Superpower Loop Integration
 
@@ -26,6 +26,7 @@ allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/scripts/verify-delivery-package.sh:*
 ## Background Knowledge
 
 - **MANDATORY**: 最终验收必须在交付包上执行，不能复用打包前结论。
+- **MANDATORY**: 必须在 `artifact-truth-gate` 通过后执行本阶段。
 - **MANDATORY**: 任一 FAIL 都必须先修复再复验。
 - **MANDATORY**: `docker` 不可用或 `docker compose up` 失败视为阻塞失败。
 - **PROHIBITED**: 不允许跳过本阶段，不允许在 FAIL>0 时输出 `DELIVERY_COMPLETE`。
@@ -66,7 +67,7 @@ allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/scripts/verify-delivery-package.sh:*
 
 ## Exit Criteria
 
-当以下全部满足时，Phase 4.5 完成：
+当以下全部满足时，Phase 4.6 完成：
 - `TASK-{ID}/docs/delivery-check-report.md` 存在
 - 报告统计中 `FAIL=0`
 - 报告包含：

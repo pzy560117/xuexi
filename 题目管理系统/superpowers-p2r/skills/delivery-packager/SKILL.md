@@ -74,7 +74,7 @@ TASK-{ID}/
 - `api-spec.md`（如适用）
 - 其他交付所需文档
 
-> 不要求复制 `.tmp` 下的旧门禁报告；这些由后续 post-package 与 delivery-checker 重新生成。
+> 不要求复制 `.tmp` 下的旧门禁报告；这些由后续 post-package、artifact-truth-gate 与 delivery-checker 重新生成。
 
 ### Step 5: 复制 prompt 与问题记录
 

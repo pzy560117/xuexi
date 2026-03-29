@@ -42,6 +42,7 @@
     "./skills/post-package-test-iteration-2/",
     "./skills/post-package-test-iteration-3/",
     "./skills/post-package-triple-check-gate/",
+    "./skills/artifact-truth-gate/",
     "./skills/delivery-checker/",
     "./skills/docker-generator/"
   ],
@@ -73,6 +74,7 @@
     "./skills/post-package-test-iteration-2/",
     "./skills/post-package-test-iteration-3/",
     "./skills/post-package-triple-check-gate/",
+    "./skills/artifact-truth-gate/",
     "./skills/delivery-checker/",
     "./skills/architect/",
     "./skills/planner/",

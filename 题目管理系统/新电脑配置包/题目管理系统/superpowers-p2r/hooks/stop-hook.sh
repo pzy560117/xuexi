@@ -11,12 +11,29 @@ HOOK_INPUT=$(cat)
 
 HOOK_SESSION=$(echo "$HOOK_INPUT" | jq -r '.session_id // ""')
 
+# Resolve a stable user home path across Windows PowerShell + Git Bash.
+resolve_user_home() {
+  local raw_home="${HOME:-}"
+  if [[ -n "${USERPROFILE:-}" ]]; then
+    raw_home="${USERPROFILE}"
+  fi
+  if command -v cygpath >/dev/null 2>&1; then
+    case "$raw_home" in
+      [A-Za-z]:\\*)
+        raw_home="$(cygpath "$raw_home")"
+        ;;
+    esac
+  fi
+  echo "$raw_home"
+}
+
 # Find the state file owned by this session.
 # Supports multiple concurrent loops (e.g. parallel tasks in executing-plans)
 # and scans both the new default path and legacy .claude path.
 SUPERPOWER_STATE_FILE=""
 ALL_CANDIDATES=()
-REGISTRY_FILE="${HOME}/.claude/superpower-loop-registry.txt"
+USER_HOME_RESOLVED="$(resolve_user_home)"
+REGISTRY_FILE="${USER_HOME_RESOLVED}/.claude/superpower-loop-registry.txt"
 
 # Remove stale registry entries (best effort, never block hook flow).
 prune_registry_path() {
@@ -40,6 +57,9 @@ inspect_candidate() {
   candidate_frontmatter=$(printf '%s\n' "$candidate_content" | sed -n '/^---$/,/^---$/{ /^---$/d; p; }')
   local candidate_session
   candidate_session=$(echo "$candidate_frontmatter" | grep '^session_id:' | sed 's/session_id: *//' || true)
+  # Normalize YAML scalar forms: trim whitespace/newline and unwrap quotes.
+  # This fixes values like session_id: "" being treated as non-empty literal.
+  candidate_session=$(printf '%s' "$candidate_session" | perl -pe 's/\r$//; s/^\s+|\s+$//g; s/^"(.*)"$/$1/; s/^\x27(.*)\x27$/$1/;')
   # Match explicit session_id, or fall through for legacy files without one.
   if [[ -z "$candidate_session" ]] || [[ "$candidate_session" == "$HOOK_SESSION" ]]; then
     SUPERPOWER_STATE_FILE="$candidate"
@@ -63,6 +83,7 @@ done
 
 if [[ -z "$SUPERPOWER_STATE_FILE" ]] && [[ -f "$REGISTRY_FILE" ]]; then
   while IFS= read -r candidate; do
+    candidate="${candidate%$'\r'}"
     [[ -n "$candidate" ]] || continue
     if [[ ! -f "$candidate" ]]; then
       prune_registry_path "$candidate"
@@ -152,10 +173,16 @@ fi
 
 # Check for completion promise (only if set)
 if [[ "$COMPLETION_PROMISE" != "null" ]] && [[ -n "$COMPLETION_PROMISE" ]]; then
-  # Extract text from <promise> tags using Perl for multiline support
-  # -0777 slurps entire input, s flag makes . match newlines
-  # .*? is non-greedy (takes FIRST tag), whitespace normalized
-  PROMISE_TEXT=$(echo "$LAST_OUTPUT" | perl -0777 -pe 's/.*?<promise>(.*?)<\/promise>.*/$1/s; s/^\s+|\s+$//g; s/\s+/ /g' 2>/dev/null || echo "")
+  # Extract text from first <promise>...</promise> tag only.
+  # Keep empty when tags are absent so legacy bare-line fallback can trigger.
+  PROMISE_TEXT=$(echo "$LAST_OUTPUT" | perl -0777 -ne '
+    if (/<promise>(.*?)<\/promise>/s) {
+      $v = $1;
+      $v =~ s/^\s+|\s+$//g;
+      $v =~ s/\s+/ /g;
+      print $v;
+    }
+  ' 2>/dev/null || true)
   LAST_NON_EMPTY_LINE=$(printf '%s\n' "$LAST_OUTPUT" | awk 'NF{line=$0} END{print line}')
   LAST_NON_EMPTY_LINE=$(echo "$LAST_NON_EMPTY_LINE" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
 
@@ -192,24 +219,51 @@ if echo "$LAST_OUTPUT" | grep -Eqi "Unknown skill:|not available as a standalone
   SKILL_RESOLUTION_ERROR=1
 fi
 
-if [[ -z "$PROMPT_TEXT" ]]; then
-  # Fallback for phase-style state files that contain only frontmatter.
-  # Derive the in-progress phase and synthesize a continuation prompt.
-  CURRENT_PHASE_NAME=$(echo "$FRONTMATTER" | awk '
-    /- name:/ { name=$3; gsub(/"/, "", name); next }
-    /status:[[:space:]]*"in_progress"/ { print name; exit }
-  ')
-  CURRENT_PHASE_PROMISE=$(echo "$FRONTMATTER" | awk '
-    /- name:/ { name=$3; gsub(/"/, "", name); next }
-    /status:[[:space:]]*"in_progress"/ { in_progress=1; next }
-    in_progress && /completion_promise:/ {
-      sub(/.*completion_promise:[[:space:]]*/, "", $0);
-      gsub(/"/, "", $0);
-      print $0;
-      exit
+# Derive in-progress phase from YAML frontmatter first.
+CURRENT_PHASE_NAME=$(echo "$FRONTMATTER" | awk '
+  /- name:/ { name=$3; gsub(/"/, "", name); next }
+  /status:[[:space:]]*"in_progress"/ { print name; exit }
+')
+CURRENT_PHASE_PROMISE=$(echo "$FRONTMATTER" | awk '
+  /- name:/ { name=$3; gsub(/"/, "", name); next }
+  /status:[[:space:]]*"in_progress"/ { in_progress=1; next }
+  in_progress && /completion_promise:/ {
+    sub(/.*completion_promise:[[:space:]]*/, "", $0);
+    gsub(/"/, "", $0);
+    print $0;
+    exit
+  }
+')
+
+# Fallback: derive in-progress phase from markdown phase table.
+if [[ -z "$CURRENT_PHASE_NAME" ]]; then
+  CURRENT_PHASE_NAME=$(printf '%s\n' "$STATE_CONTENT" | awk -F'|' '
+    /^\|[[:space:]]*[0-9]+[[:space:]]*\|/ {
+      name=$3; status=$4;
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", name);
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", status);
+      if (status=="in_progress") { print name; exit }
     }
   ')
+  CURRENT_PHASE_PROMISE=$(printf '%s\n' "$STATE_CONTENT" | awk -F'|' '
+    /^\|[[:space:]]*[0-9]+[[:space:]]*\|/ {
+      status=$4; promise=$5;
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", status);
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", promise);
+      if (status=="in_progress") { print promise; exit }
+    }
+  ')
+fi
 
+# Synthesize continuation prompt for loop-state files (YAML-only or markdown table).
+SHOULD_SYNTHESIZE=0
+if [[ -z "$PROMPT_TEXT" ]]; then
+  SHOULD_SYNTHESIZE=1
+elif printf '%s\n' "$STATE_CONTENT" | grep -q '^## Phases'; then
+  SHOULD_SYNTHESIZE=1
+fi
+
+if [[ "$SHOULD_SYNTHESIZE" -eq 1 ]]; then
   if [[ -n "$CURRENT_PHASE_NAME" ]]; then
     PHASE_SKILL="superpowers:${CURRENT_PHASE_NAME}"
     FALLBACK_SKILL_ROOT="${CLAUDE_PLUGIN_ROOT:-superpowers-p2r}"

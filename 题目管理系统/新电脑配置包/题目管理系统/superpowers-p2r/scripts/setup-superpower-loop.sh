@@ -223,10 +223,27 @@ started_at: "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 $PROMPT
 EOF
 
+# Resolve a stable user home path across Windows PowerShell + Git Bash.
+resolve_user_home() {
+  local raw_home="${HOME:-}"
+  if [[ -n "${USERPROFILE:-}" ]]; then
+    raw_home="${USERPROFILE}"
+  fi
+  if command -v cygpath >/dev/null 2>&1; then
+    case "$raw_home" in
+      [A-Za-z]:\\*)
+        raw_home="$(cygpath "$raw_home")"
+        ;;
+    esac
+  fi
+  echo "$raw_home"
+}
+
 # Register absolute state file path so stop-hook can recover even if
 # subsequent phases execute from a different working directory.
 STATE_FILE_ABS="$(cd "$STATE_DIR" && pwd)/$(basename "$STATE_FILE")"
-REGISTRY_DIR="${HOME}/.claude"
+USER_HOME_RESOLVED="$(resolve_user_home)"
+REGISTRY_DIR="${USER_HOME_RESOLVED}/.claude"
 REGISTRY_FILE="${REGISTRY_DIR}/superpower-loop-registry.txt"
 mkdir -p "$REGISTRY_DIR"
 touch "$REGISTRY_FILE"

@@ -95,20 +95,20 @@ register_registry_path() {
 
 PHASE_NAMES=(
   "prompt-parser" "spec-gateway" "writing-plans-p2r" "consistency-gate"
-  "executing-plans-p2r" "domain-checklist" "self-review" "test-gate"
-  "runtime-smoke" "stability-loop" "coverage-gate" "policy-gate"
+  "executing-plans-p2r" "domain-checklist" "self-review" "llm-test-iteration-1"
+  "llm-test-iteration-2" "llm-test-iteration-3" "llm-triple-check-gate"
   "delivery-packager" "delivery-checker"
 )
 PHASE_PROMISES=(
   "PROMPT_PARSING_COMPLETE" "SPEC_COMPLETE" "PLANNING_COMPLETE" "ANALYSIS_COMPLETE"
-  "EXECUTION_COMPLETE" "CHECKLIST_COMPLETE" "SELF_REVIEW_COMPLETE" "TEST_GATE_COMPLETE"
-  "RUNTIME_SMOKE_COMPLETE" "STABILITY_COMPLETE" "COVERAGE_COMPLETE" "POLICY_COMPLETE"
+  "EXECUTION_COMPLETE" "CHECKLIST_COMPLETE" "SELF_REVIEW_COMPLETE" "LLM_TEST_R1_COMPLETE"
+  "LLM_TEST_R2_COMPLETE" "LLM_TEST_R3_COMPLETE" "LLM_TRIPLE_CHECK_COMPLETE"
   "PACKAGE_COMPLETE" "DELIVERY_COMPLETE"
 )
 PHASE_SKIPPABLE=(
   "no" "yes" "no" "yes"
-  "no" "yes" "yes" "yes"
-  "yes" "yes" "yes" "yes"
+  "no" "yes" "yes" "no"
+  "no" "no" "no"
   "yes" "yes"
 )
 
@@ -127,13 +127,12 @@ phase_index_from_name() {
     "executing-plans-p2r"|"executing-plans"|"executing plans p2r"|"executing plans"|"implementation") echo 4 ;;
     "domain-checklist"|"domain checklist") echo 5 ;;
     "self-review"|"self review") echo 6 ;;
-    "test-gate"|"test gate") echo 7 ;;
-    "runtime-smoke"|"runtime smoke") echo 8 ;;
-    "stability-loop"|"stability loop") echo 9 ;;
-    "coverage-gate"|"coverage gate") echo 10 ;;
-    "policy-gate"|"policy gate") echo 11 ;;
-    "delivery-packager"|"delivery packager") echo 12 ;;
-    "delivery-checker"|"delivery checker") echo 13 ;;
+    "llm-test-iteration-1"|"llm test iteration 1"|"test-gate"|"test gate") echo 7 ;;
+    "llm-test-iteration-2"|"llm test iteration 2"|"runtime-smoke"|"runtime smoke") echo 8 ;;
+    "llm-test-iteration-3"|"llm test iteration 3"|"stability-loop"|"stability loop") echo 9 ;;
+    "llm-triple-check-gate"|"llm triple check gate"|"coverage-gate"|"coverage gate"|"policy-gate"|"policy gate") echo 10 ;;
+    "delivery-packager"|"delivery packager") echo 11 ;;
+    "delivery-checker"|"delivery checker") echo 12 ;;
     *)
       return 1
       ;;
@@ -266,13 +265,12 @@ recover_state_from_legacy_status_markdown() {
     "Phase 2 (Implementation)"|"Phase 2 (executing-plans-p2r)") phase_idx=4 ;;
     "Phase 2.5 (domain-checklist)") phase_idx=5 ;;
     "Phase 3 (self-review)") phase_idx=6 ;;
-    "Phase 3.5 (test-gate)") phase_idx=7 ;;
-    "Phase 3.6 (runtime-smoke)") phase_idx=8 ;;
-    "Phase 3.7 (stability-loop)") phase_idx=9 ;;
-    "Phase 3.8 (coverage-gate)") phase_idx=10 ;;
-    "Phase 3.9 (policy-gate)") phase_idx=11 ;;
-    "Phase 4 (delivery-packager)") phase_idx=12 ;;
-    "Phase 4.5 (delivery-checker)") phase_idx=13 ;;
+    "Phase 3.5 (test-gate)"|"Phase 3.5 (llm-test-iteration-1)") phase_idx=7 ;;
+    "Phase 3.6 (runtime-smoke)"|"Phase 3.6 (llm-test-iteration-2)") phase_idx=8 ;;
+    "Phase 3.7 (stability-loop)"|"Phase 3.7 (llm-test-iteration-3)") phase_idx=9 ;;
+    "Phase 3.8 (coverage-gate)"|"Phase 3.9 (policy-gate)"|"Phase 3.8 (llm-triple-check-gate)") phase_idx=10 ;;
+    "Phase 4 (delivery-packager)") phase_idx=11 ;;
+    "Phase 4.5 (delivery-checker)") phase_idx=12 ;;
     *) return 1 ;;
   esac
   local state_path="$SUPERPOWER_STATE_FILE"
@@ -629,15 +627,34 @@ phase_label_from_index() {
     8) echo "Phase 3.6" ;;
     9) echo "Phase 3.7" ;;
     10) echo "Phase 3.8" ;;
-    11) echo "Phase 3.9" ;;
-    12) echo "Phase 4" ;;
-    13) echo "Phase 4.5" ;;
+    11) echo "Phase 4" ;;
+    12) echo "Phase 4.5" ;;
     *) echo "" ;;
   esac
 }
 
 latest_task_dir() {
   ls -1dt TASK-* 2>/dev/null | head -n 1
+}
+
+# Validate report contains an explicit PASS verdict marker.
+report_pass_marker_ok() {
+  local report_file="$1"
+  [[ -f "$report_file" ]] || return 1
+  if grep -Eqi 'FINAL_VERDICT:[[:space:]]*PASS|VERDICT:[[:space:]]*PASS' "$report_file"; then
+    return 0
+  fi
+  return 1
+}
+
+# Validate sub-agent report includes concrete sub-agent id evidence.
+subagent_report_evidence_ok() {
+  local report_file="$1"
+  [[ -f "$report_file" ]] || return 1
+  if grep -Eiq '^SUBAGENT_ID:[[:space:]]*[A-Za-z0-9._:-]+' "$report_file"; then
+    return 0
+  fi
+  return 1
 }
 
 phase_artifacts_ok() {
@@ -679,20 +696,30 @@ phase_artifacts_ok() {
     "self-review")
       [[ -f ".tmp/self-review-report.md" ]] || missing+=(".tmp/self-review-report.md")
       ;;
-    "test-gate")
-      [[ -f ".tmp/test-gate-report.md" ]] || missing+=(".tmp/test-gate-report.md")
+    "llm-test-iteration-1")
+      [[ -f ".tmp/llm-test-r1-main.md" ]] || missing+=(".tmp/llm-test-r1-main.md")
+      [[ -f ".tmp/llm-test-r1-subagent.md" ]] || missing+=(".tmp/llm-test-r1-subagent.md")
+      report_pass_marker_ok ".tmp/llm-test-r1-main.md" || missing+=(".tmp/llm-test-r1-main.md(FINAL_VERDICT: PASS)")
+      report_pass_marker_ok ".tmp/llm-test-r1-subagent.md" || missing+=(".tmp/llm-test-r1-subagent.md(FINAL_VERDICT: PASS)")
+      subagent_report_evidence_ok ".tmp/llm-test-r1-subagent.md" || missing+=(".tmp/llm-test-r1-subagent.md(SUBAGENT_ID)")
       ;;
-    "runtime-smoke")
-      [[ -f ".tmp/runtime-smoke-report.md" ]] || missing+=(".tmp/runtime-smoke-report.md")
+    "llm-test-iteration-2")
+      [[ -f ".tmp/llm-test-r2-main.md" ]] || missing+=(".tmp/llm-test-r2-main.md")
+      [[ -f ".tmp/llm-test-r2-subagent.md" ]] || missing+=(".tmp/llm-test-r2-subagent.md")
+      report_pass_marker_ok ".tmp/llm-test-r2-main.md" || missing+=(".tmp/llm-test-r2-main.md(FINAL_VERDICT: PASS)")
+      report_pass_marker_ok ".tmp/llm-test-r2-subagent.md" || missing+=(".tmp/llm-test-r2-subagent.md(FINAL_VERDICT: PASS)")
+      subagent_report_evidence_ok ".tmp/llm-test-r2-subagent.md" || missing+=(".tmp/llm-test-r2-subagent.md(SUBAGENT_ID)")
       ;;
-    "stability-loop")
-      [[ -f ".tmp/stability-loop-report.md" ]] || missing+=(".tmp/stability-loop-report.md")
+    "llm-test-iteration-3")
+      [[ -f ".tmp/llm-test-r3-main.md" ]] || missing+=(".tmp/llm-test-r3-main.md")
+      [[ -f ".tmp/llm-test-r3-subagent.md" ]] || missing+=(".tmp/llm-test-r3-subagent.md")
+      report_pass_marker_ok ".tmp/llm-test-r3-main.md" || missing+=(".tmp/llm-test-r3-main.md(FINAL_VERDICT: PASS)")
+      report_pass_marker_ok ".tmp/llm-test-r3-subagent.md" || missing+=(".tmp/llm-test-r3-subagent.md(FINAL_VERDICT: PASS)")
+      subagent_report_evidence_ok ".tmp/llm-test-r3-subagent.md" || missing+=(".tmp/llm-test-r3-subagent.md(SUBAGENT_ID)")
       ;;
-    "coverage-gate")
-      [[ -f ".tmp/coverage-gate-report.md" ]] || missing+=(".tmp/coverage-gate-report.md")
-      ;;
-    "policy-gate")
-      [[ -f ".tmp/policy-gate-report.md" ]] || missing+=(".tmp/policy-gate-report.md")
+    "llm-triple-check-gate")
+      [[ -f ".tmp/llm-triple-check-gate.md" ]] || missing+=(".tmp/llm-triple-check-gate.md")
+      report_pass_marker_ok ".tmp/llm-triple-check-gate.md" || missing+=(".tmp/llm-triple-check-gate.md(FINAL_VERDICT: PASS)")
       ;;
     "delivery-packager")
       local d
@@ -718,6 +745,73 @@ phase_artifacts_ok() {
   fi
   PHASE_ARTIFACTS_MISSING=""
   return 0
+}
+
+auto_repair_instructions_for_phase() {
+  local phase="$1"
+  case "$phase" in
+    "llm-test-iteration-1")
+      cat <<'EOF'
+AUTO-REPAIR PLAN (Phase 3.5):
+1) Re-run round-1 validation in the same phase.
+2) Ensure two reports exist:
+   - .tmp/llm-test-r1-main.md
+   - .tmp/llm-test-r1-subagent.md
+3) Spawn/reuse a sub-agent and write real evidence line:
+   SUBAGENT_ID: <actual-agent-id>
+4) Both reports must include:
+   FINAL_VERDICT: PASS
+5) Do NOT ask user for confirmation; repair and retry now.
+EOF
+      ;;
+    "llm-test-iteration-2")
+      cat <<'EOF'
+AUTO-REPAIR PLAN (Phase 3.6):
+1) Re-run round-2 validation after reset actions.
+2) Ensure two reports exist:
+   - .tmp/llm-test-r2-main.md
+   - .tmp/llm-test-r2-subagent.md
+3) Sub-agent report must include:
+   SUBAGENT_ID: <actual-agent-id>
+4) Both reports must include:
+   FINAL_VERDICT: PASS
+5) Do NOT ask user for confirmation; repair and retry now.
+EOF
+      ;;
+    "llm-test-iteration-3")
+      cat <<'EOF'
+AUTO-REPAIR PLAN (Phase 3.7):
+1) Re-run round-3 validation (boundary + shuffled order).
+2) Ensure two reports exist:
+   - .tmp/llm-test-r3-main.md
+   - .tmp/llm-test-r3-subagent.md
+3) Sub-agent report must include:
+   SUBAGENT_ID: <actual-agent-id>
+4) Both reports must include:
+   FINAL_VERDICT: PASS
+5) Do NOT ask user for confirmation; repair and retry now.
+EOF
+      ;;
+    "llm-triple-check-gate")
+      cat <<'EOF'
+AUTO-REPAIR PLAN (Phase 3.8):
+1) Re-read all 6 round reports.
+2) Repair missing/inconsistent report fields and rerun corresponding round if needed.
+3) Regenerate .tmp/llm-triple-check-gate.md with:
+   FINAL_VERDICT: PASS
+4) Do NOT ask user for confirmation; repair and retry now.
+EOF
+      ;;
+    *)
+      cat <<'EOF'
+AUTO-REPAIR PLAN:
+1) Complete missing artifacts in current phase.
+2) Re-run validation for this phase.
+3) When genuinely complete, output current phase promise again.
+4) Do NOT ask user for confirmation; repair and retry now.
+EOF
+      ;;
+  esac
 }
 
 output_has_explicit_promise_signal() {
@@ -1132,11 +1226,16 @@ SKILL RESOLUTION RECOVERY:
 fi
 
 if [[ -n "${PHASE_VALIDATION_NOTE:-}" ]]; then
+  AUTO_REPAIR_GUIDE="$(auto_repair_instructions_for_phase "${CURRENT_PHASE_NAME:-}")"
   PROMPT_TEXT="${PROMPT_TEXT}
 
 PHASE COMPLETION BLOCKED:
 - ${PHASE_VALIDATION_NOTE}
-- Please finish missing artifacts first, then output the phase completion promise again."
+- Enter auto-repair mode immediately in THIS phase.
+- Do not ask user for help, approval, or clarification.
+- Fix, rerun validation, regenerate evidence, then output the phase promise again.
+
+${AUTO_REPAIR_GUIDE}"
 fi
 
 # Update iteration in frontmatter (portable across macOS and Linux)

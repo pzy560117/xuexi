@@ -39,11 +39,15 @@ A completion promise should name a **state** that is objectively true or false, 
 | `superpowers:brainstorming` | `BRAINSTORMING_COMPLETE` | All 4 phases done, design folder committed |
 | `superpowers:writing-plans` | `PLAN_COMPLETE` | All phases done, plan folder committed |
 | `superpowers:executing-plans` | `EXECUTION_COMPLETE` | All tasks executed, verified, and committed |
-| `superpowers:test-gate` | `TEST_GATE_COMPLETE` | Strict test gate passed (no FAIL), report generated |
-| `superpowers:runtime-smoke` | `RUNTIME_SMOKE_COMPLETE` | Runtime smoke passed (service boot + health + API smoke) |
-| `superpowers:stability-loop` | `STABILITY_COMPLETE` | All runtime smoke iterations passed |
-| `superpowers:coverage-gate` | `COVERAGE_COMPLETE` | Coverage thresholds passed |
-| `superpowers:policy-gate` | `POLICY_COMPLETE` | CI/workflow policy checks passed |
+| `superpowers:llm-test-iteration-1` | `LLM_TEST_R1_COMPLETE` | Round 1 main + subagent reports are both PASS |
+| `superpowers:llm-test-iteration-2` | `LLM_TEST_R2_COMPLETE` | Round 2 main + subagent reports are both PASS |
+| `superpowers:llm-test-iteration-3` | `LLM_TEST_R3_COMPLETE` | Round 3 main + subagent reports are both PASS |
+| `superpowers:llm-triple-check-gate` | `LLM_TRIPLE_CHECK_COMPLETE` | Three rounds (6 reports) are consistent and all PASS |
+| `superpowers:test-gate` | `TEST_GATE_COMPLETE` | Legacy script-based strict test gate passed |
+| `superpowers:runtime-smoke` | `RUNTIME_SMOKE_COMPLETE` | Legacy script-based runtime smoke passed |
+| `superpowers:stability-loop` | `STABILITY_COMPLETE` | Legacy script-based stability loop passed |
+| `superpowers:coverage-gate` | `COVERAGE_COMPLETE` | Legacy script-based coverage thresholds passed |
+| `superpowers:policy-gate` | `POLICY_COMPLETE` | Legacy script-based policy checks passed |
 | `superpowers:prompt2repo` | `DELIVERY_COMPLETE` | All pipeline phases completed, delivery check passed |
 
 ## Promise Integrity Rules

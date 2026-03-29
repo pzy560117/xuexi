@@ -259,6 +259,440 @@ recover_state_from_legacy_status_markdown() {
   return 0
 }
 
+# Parse YAML phase blocks from frontmatter and expose current/next phase metadata.
+# Globals produced:
+#   CURRENT_PHASE_INDEX, CURRENT_PHASE_NAME, CURRENT_PHASE_PROMISE,
+#   NEXT_PENDING_PHASE_INDEX, LAST_PHASE_INDEX
+parse_phase_metadata_from_frontmatter() {
+  local frontmatter="$1"
+  CURRENT_PHASE_INDEX=-1
+  CURRENT_PHASE_NAME=""
+  CURRENT_PHASE_PROMISE=""
+  NEXT_PENDING_PHASE_INDEX=-1
+  LAST_PHASE_INDEX=-1
+  IN_PROGRESS_COUNT=0
+
+  local rows=()
+  local row
+  while IFS= read -r row; do
+    rows+=("$row")
+  done < <(printf '%s\n' "$frontmatter" | awk '
+    BEGIN { idx=-1; name=""; status=""; promise="" }
+    /^[[:space:]]*-[[:space:]]*name:[[:space:]]*/ {
+      if (idx >= 0) {
+        print idx "\t" name "\t" status "\t" promise
+      }
+      idx++
+      line=$0
+      sub(/^[[:space:]]*-[[:space:]]*name:[[:space:]]*/, "", line)
+      gsub(/"/, "", line)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+      name=line
+      status=""
+      promise=""
+      next
+    }
+    idx >= 0 && /^[[:space:]]*status:[[:space:]]*/ {
+      line=$0
+      sub(/^[[:space:]]*status:[[:space:]]*/, "", line)
+      gsub(/"/, "", line)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+      status=line
+      next
+    }
+    idx >= 0 && /^[[:space:]]*completion_promise:[[:space:]]*/ {
+      line=$0
+      sub(/^[[:space:]]*completion_promise:[[:space:]]*/, "", line)
+      gsub(/"/, "", line)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+      promise=line
+      next
+    }
+    END {
+      if (idx >= 0) {
+        print idx "\t" name "\t" status "\t" promise
+      }
+    }
+  ')
+
+  if [[ ${#rows[@]} -eq 0 ]]; then
+    return 1
+  fi
+
+  local current_found=0
+  local i
+  local name
+  local status
+  local promise
+  for row in "${rows[@]}"; do
+    IFS=$'\t' read -r i name status promise <<< "$row"
+    LAST_PHASE_INDEX="$i"
+    if [[ "$status" == "in_progress" ]]; then
+      IN_PROGRESS_COUNT=$((IN_PROGRESS_COUNT + 1))
+    fi
+    if [[ "$status" == "in_progress" ]] && [[ "$CURRENT_PHASE_INDEX" -lt 0 ]]; then
+      CURRENT_PHASE_INDEX="$i"
+      CURRENT_PHASE_NAME="$name"
+      CURRENT_PHASE_PROMISE="$promise"
+      current_found=1
+      continue
+    fi
+    if [[ "$current_found" -eq 1 ]] && [[ "$NEXT_PENDING_PHASE_INDEX" -lt 0 ]] && [[ "$status" == "pending" ]]; then
+      NEXT_PENDING_PHASE_INDEX="$i"
+    fi
+  done
+
+  return 0
+}
+
+# Fallback parser for markdown phase table format.
+parse_phase_metadata_from_markdown_table() {
+  local content="$1"
+  CURRENT_PHASE_INDEX=-1
+  CURRENT_PHASE_NAME=""
+  CURRENT_PHASE_PROMISE=""
+  NEXT_PENDING_PHASE_INDEX=-1
+  LAST_PHASE_INDEX=-1
+  IN_PROGRESS_COUNT=0
+
+  local rows=()
+  local row
+  while IFS= read -r row; do
+    rows+=("$row")
+  done < <(printf '%s\n' "$content" | awk -F'|' '
+    /^\|[[:space:]]*[0-9]+[[:space:]]*\|/ {
+      idx=$2; name=$3; status=$4; promise=$5
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", idx)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", status)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", promise)
+      print idx "\t" name "\t" status "\t" promise
+    }
+  ')
+
+  if [[ ${#rows[@]} -eq 0 ]]; then
+    return 1
+  fi
+
+  local current_found=0
+  local i
+  local name
+  local status
+  local promise
+  for row in "${rows[@]}"; do
+    IFS=$'\t' read -r i name status promise <<< "$row"
+    LAST_PHASE_INDEX="$i"
+    if [[ "$status" == "in_progress" ]]; then
+      IN_PROGRESS_COUNT=$((IN_PROGRESS_COUNT + 1))
+    fi
+    if [[ "$status" == "in_progress" ]] && [[ "$CURRENT_PHASE_INDEX" -lt 0 ]]; then
+      CURRENT_PHASE_INDEX="$i"
+      CURRENT_PHASE_NAME="$name"
+      CURRENT_PHASE_PROMISE="$promise"
+      current_found=1
+      continue
+    fi
+    if [[ "$current_found" -eq 1 ]] && [[ "$NEXT_PENDING_PHASE_INDEX" -lt 0 ]] && [[ "$status" == "pending" ]]; then
+      NEXT_PENDING_PHASE_INDEX="$i"
+    fi
+  done
+
+  return 0
+}
+
+# Persist phase advancement directly in state file.
+advance_phase_in_state_file() {
+  local state_file="$1"
+  local current_idx="$2"
+  local next_idx="$3"
+  local tmp_file="${state_file}.phase.$$"
+
+  awk -v ci="$current_idx" -v ni="$next_idx" '
+    BEGIN { in_frontmatter=0; phase=-1 }
+    NR==1 { sub(/^\xef\xbb\xbf/, "") }
+    $0 == "---" {
+      if (in_frontmatter == 0) { in_frontmatter=1; print; next }
+      if (in_frontmatter == 1) { in_frontmatter=2; print; next }
+    }
+    in_frontmatter == 1 && $0 ~ /^[[:space:]]*-[[:space:]]*name:[[:space:]]*/ {
+      phase++
+      print
+      next
+    }
+    in_frontmatter == 1 && $0 ~ /^[[:space:]]*status:[[:space:]]*/ {
+      if (phase == ci) {
+        sub(/status:.*/, "status: \"done\"")
+      } else if (phase == ni) {
+        sub(/status:.*/, "status: \"in_progress\"")
+      }
+      print
+      next
+    }
+    in_frontmatter == 1 && $0 ~ /^[[:space:]]*current_phase:[[:space:]]*/ {
+      if (ni >= 0) {
+        sub(/current_phase:.*/, "current_phase: " ni)
+      } else {
+        sub(/current_phase:.*/, "current_phase: " ci)
+      }
+      print
+      next
+    }
+    { print }
+  ' "$state_file" > "$tmp_file"
+
+  mv "$tmp_file" "$state_file"
+}
+
+# Ensure only one phase stays in_progress. Extra in_progress phases are
+# normalized to pending to avoid ambiguous auto-advance behavior.
+normalize_multiple_in_progress_in_state() {
+  local state_file="$1"
+  local keep_idx="$2"
+  local tmp_file="${state_file}.normalize.$$"
+
+  awk -v ki="$keep_idx" '
+    BEGIN { in_frontmatter=0; phase=-1 }
+    NR==1 { sub(/^\xef\xbb\xbf/, "") }
+    $0 == "---" {
+      if (in_frontmatter == 0) { in_frontmatter=1; print; next }
+      if (in_frontmatter == 1) { in_frontmatter=2; print; next }
+    }
+    in_frontmatter == 1 && $0 ~ /^[[:space:]]*-[[:space:]]*name:[[:space:]]*/ {
+      phase++
+      print
+      next
+    }
+    in_frontmatter == 1 && $0 ~ /^[[:space:]]*status:[[:space:]]*/ {
+      if (phase != ki && $0 ~ /in_progress/) {
+        sub(/status:.*/, "status: \"pending\"")
+      }
+      print
+      next
+    }
+    { print }
+  ' "$state_file" > "$tmp_file"
+
+  mv "$tmp_file" "$state_file"
+}
+
+# Keep current_phase aligned with the detected in_progress phase index.
+sync_current_phase_index_in_state() {
+  local state_file="$1"
+  local idx="$2"
+  local tmp_file="${state_file}.sync.$$"
+
+  sed "s/^current_phase: .*/current_phase: ${idx}/" "$state_file" > "$tmp_file"
+  mv "$tmp_file" "$state_file"
+}
+
+# Promote first pending phase to in_progress when state file has no active phase.
+promote_first_pending_to_in_progress() {
+  local state_file="$1"
+  local pending_idx
+  pending_idx=$(awk '
+    BEGIN { in_frontmatter=0; phase=-1 }
+    NR==1 { sub(/^\xef\xbb\xbf/, "") }
+    $0 == "---" {
+      if (in_frontmatter == 0) { in_frontmatter=1; next }
+      if (in_frontmatter == 1) { in_frontmatter=2; next }
+    }
+    in_frontmatter == 1 && $0 ~ /^[[:space:]]*-[[:space:]]*name:[[:space:]]*/ { phase++; next }
+    in_frontmatter == 1 && $0 ~ /^[[:space:]]*status:[[:space:]]*/ {
+      if ($0 ~ /pending/) { print phase; exit }
+    }
+  ' "$state_file")
+
+  if [[ -n "$pending_idx" ]] && [[ "$pending_idx" =~ ^[0-9]+$ ]]; then
+    local tmp_file="${state_file}.promote.$$"
+    awk -v pi="$pending_idx" '
+      BEGIN { in_frontmatter=0; phase=-1 }
+      NR==1 { sub(/^\xef\xbb\xbf/, "") }
+      $0 == "---" {
+        if (in_frontmatter == 0) { in_frontmatter=1; print; next }
+        if (in_frontmatter == 1) { in_frontmatter=2; print; next }
+      }
+      in_frontmatter == 1 && $0 ~ /^[[:space:]]*-[[:space:]]*name:[[:space:]]*/ {
+        phase++
+        print
+        next
+      }
+      in_frontmatter == 1 && $0 ~ /^[[:space:]]*status:[[:space:]]*/ {
+        if (phase == pi) {
+          sub(/status:.*/, "status: \"in_progress\"")
+        }
+        print
+        next
+      }
+      in_frontmatter == 1 && $0 ~ /^[[:space:]]*current_phase:[[:space:]]*/ {
+        sub(/current_phase:.*/, "current_phase: " pi)
+        print
+        next
+      }
+      { print }
+    ' "$state_file" > "$tmp_file"
+    mv "$tmp_file" "$state_file"
+    return 0
+  fi
+  return 1
+}
+
+phase_label_from_index() {
+  local idx="$1"
+  case "$idx" in
+    0) echo "Phase 0" ;;
+    1) echo "Phase 0.5" ;;
+    2) echo "Phase 1" ;;
+    3) echo "Phase 1.5" ;;
+    4) echo "Phase 2" ;;
+    5) echo "Phase 2.5" ;;
+    6) echo "Phase 3" ;;
+    7) echo "Phase 3.5" ;;
+    8) echo "Phase 3.6" ;;
+    9) echo "Phase 3.7" ;;
+    10) echo "Phase 3.8" ;;
+    11) echo "Phase 3.9" ;;
+    12) echo "Phase 4" ;;
+    13) echo "Phase 4.5" ;;
+    *) echo "" ;;
+  esac
+}
+
+latest_task_dir() {
+  ls -1dt TASK-* 2>/dev/null | head -n 1
+}
+
+phase_artifacts_ok() {
+  local phase="$1"
+  local missing=()
+  local f
+
+  case "$phase" in
+    "prompt-parser")
+      for f in "docs/designs/_meta.md" "docs/designs/requirement-analysis.md" "metadata.draft.json" "questions.md"; do
+        [[ -f "$f" ]] || missing+=("$f")
+      done
+      ;;
+    "spec-gateway")
+      for f in "docs/specs/spec.md" "docs/specs/checklists/requirements.md"; do
+        [[ -f "$f" ]] || missing+=("$f")
+      done
+      ;;
+    "writing-plans-p2r")
+      for f in "docs/designs/bdd-specs.md" "docs/designs/architecture.md" "docs/designs/best-practices.md" "docs/plans/_index.md"; do
+        [[ -f "$f" ]] || missing+=("$f")
+      done
+      compgen -G "docs/plans/task-*.md" > /dev/null || missing+=("docs/plans/task-*.md")
+      ;;
+    "consistency-gate")
+      [[ -f "docs/specs/analysis-report.md" ]] || missing+=("docs/specs/analysis-report.md")
+      ;;
+    "executing-plans-p2r")
+      [[ -f "docs/plans/_index.md" ]] || missing+=("docs/plans/_index.md")
+      if [[ -f "docs/plans/_index.md" ]] && grep -Eq '\|\s*pending\s*\|' "docs/plans/_index.md"; then
+        missing+=("docs/plans/_index.md(no pending)")
+      fi
+      ;;
+    "domain-checklist")
+      for f in "docs/specs/checklists/security.md" "docs/specs/checklists/code_quality.md" "docs/specs/checklists/api.md" "docs/specs/checklists/opensource.md" "docs/specs/checklists/execution-report.md"; do
+        [[ -f "$f" ]] || missing+=("$f")
+      done
+      ;;
+    "self-review")
+      [[ -f ".tmp/self-review-report.md" ]] || missing+=(".tmp/self-review-report.md")
+      ;;
+    "test-gate")
+      [[ -f ".tmp/test-gate-report.md" ]] || missing+=(".tmp/test-gate-report.md")
+      ;;
+    "runtime-smoke")
+      [[ -f ".tmp/runtime-smoke-report.md" ]] || missing+=(".tmp/runtime-smoke-report.md")
+      ;;
+    "stability-loop")
+      [[ -f ".tmp/stability-loop-report.md" ]] || missing+=(".tmp/stability-loop-report.md")
+      ;;
+    "coverage-gate")
+      [[ -f ".tmp/coverage-gate-report.md" ]] || missing+=(".tmp/coverage-gate-report.md")
+      ;;
+    "policy-gate")
+      [[ -f ".tmp/policy-gate-report.md" ]] || missing+=(".tmp/policy-gate-report.md")
+      ;;
+    "delivery-packager")
+      local d
+      d="$(latest_task_dir)"
+      [[ -n "$d" ]] || missing+=("TASK-*")
+      [[ -n "$d" && -d "$d/repo" ]] || missing+=("TASK-*/repo")
+      [[ -n "$d" && -f "$d/metadata.json" ]] || missing+=("TASK-*/metadata.json")
+      ;;
+    "delivery-checker")
+      local d2
+      d2="$(latest_task_dir)"
+      [[ -n "$d2" ]] || missing+=("TASK-*")
+      [[ -n "$d2" && -f "$d2/delivery-check-report.md" ]] || missing+=("TASK-*/delivery-check-report.md")
+      ;;
+    *)
+      ;;
+  esac
+
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    PHASE_ARTIFACTS_MISSING="$(printf '%s, ' "${missing[@]}")"
+    PHASE_ARTIFACTS_MISSING="${PHASE_ARTIFACTS_MISSING%, }"
+    return 1
+  fi
+  PHASE_ARTIFACTS_MISSING=""
+  return 0
+}
+
+output_has_explicit_promise_signal() {
+  local token="$1"
+  [[ -n "$token" ]] || return 1
+
+  if [[ "$LAST_NON_EMPTY_LINE" =~ ^\<promise\>[[:space:]]*${token}[[:space:]]*\<\/promise\>$ ]]; then
+    return 0
+  fi
+  if [[ "$LAST_NON_EMPTY_LINE" == "$token" ]]; then
+    return 0
+  fi
+
+  if printf '%s\n' "$LAST_OUTPUT" | grep -Eq "^[[:space:][:punct:]]*<promise>[[:space:]]*${token}[[:space:]]*</promise>[[:space:][:punct:]]*$"; then
+    return 0
+  fi
+  if printf '%s\n' "$LAST_OUTPUT" | grep -Eq "^[[:space:][:punct:]]*${token}[[:space:][:punct:]]*$"; then
+    return 0
+  fi
+  if printf '%s\n' "$LAST_OUTPUT" | grep -Eq "\"promise\"[[:space:]]*:[[:space:]]*\"${token}\""; then
+    return 0
+  fi
+  return 1
+}
+
+output_has_phase_completion_hint() {
+  local phase_label="$1"
+  local phase_name="$2"
+  local token="$3"
+
+  local lower
+  lower=$(printf '%s' "$LAST_OUTPUT" | tr '[:upper:]' '[:lower:]')
+  local token_words
+  token_words=$(printf '%s' "$token" | tr '[:upper:]' '[:lower:]' | tr '_' ' ')
+
+  if [[ "$lower" == *"$token_words"* ]]; then
+    return 0
+  fi
+
+  if [[ -n "$phase_label" ]] && printf '%s' "$lower" | grep -Fqi "$(printf '%s' "$phase_label" | tr '[:upper:]' '[:lower:]')" && printf '%s' "$LAST_OUTPUT" | grep -Eqi "(complete|completed|done|finish|finished|pass|通过|完成|已完成)"; then
+    return 0
+  fi
+
+  if [[ -n "$phase_name" ]] && printf '%s' "$lower" | grep -Fqi "$phase_name" && printf '%s' "$LAST_OUTPUT" | grep -Eqi "(complete|completed|done|finish|finished|pass|通过|完成|已完成)"; then
+    return 0
+  fi
+
+  return 1
+}
+
+output_has_global_completion_hint() {
+  printf '%s\n' "$LAST_OUTPUT" | grep -Eqi "(all phases completed|pipeline has completed|pipeline completed|delivery complete|DELIVERY_COMPLETE|全部阶段完成|流水线完成|交付完成)"
+}
+
 # Parse a candidate state file and match session ownership.
 inspect_candidate() {
   local candidate="$1"
@@ -375,6 +809,39 @@ if [[ $MAX_ITERATIONS -gt 0 ]] && [[ $ITERATION -ge $MAX_ITERATIONS ]]; then
   exit 0
 fi
 
+# Derive current/next phase metadata early (YAML first, markdown fallback).
+if ! parse_phase_metadata_from_frontmatter "$FRONTMATTER"; then
+  parse_phase_metadata_from_markdown_table "$STATE_CONTENT" || true
+fi
+
+# Self-heal: ensure only one in_progress exists.
+if [[ "${IN_PROGRESS_COUNT:-0}" -gt 1 ]] && [[ "${CURRENT_PHASE_INDEX:--1}" =~ ^[0-9]+$ ]]; then
+  echo "Warning: Detected multiple in_progress phases; normalizing to phase index ${CURRENT_PHASE_INDEX}." >&2
+  normalize_multiple_in_progress_in_state "$SUPERPOWER_STATE_FILE" "$CURRENT_PHASE_INDEX"
+  STATE_CONTENT=$(awk 'NR==1{sub(/^\xef\xbb\xbf/,"")} {print}' "$SUPERPOWER_STATE_FILE")
+  FRONTMATTER=$(printf '%s\n' "$STATE_CONTENT" | sed -n '/^---$/,/^---$/{ /^---$/d; p; }')
+  parse_phase_metadata_from_frontmatter "$FRONTMATTER" || parse_phase_metadata_from_markdown_table "$STATE_CONTENT" || true
+fi
+
+# Self-heal: if no active phase exists but pending phases remain, auto-promote first pending.
+if [[ "${CURRENT_PHASE_INDEX:--1}" -lt 0 ]]; then
+  if promote_first_pending_to_in_progress "$SUPERPOWER_STATE_FILE"; then
+    echo "Warning: No in_progress phase found; auto-promoted first pending phase." >&2
+    STATE_CONTENT=$(awk 'NR==1{sub(/^\xef\xbb\xbf/,"")} {print}' "$SUPERPOWER_STATE_FILE")
+    FRONTMATTER=$(printf '%s\n' "$STATE_CONTENT" | sed -n '/^---$/,/^---$/{ /^---$/d; p; }')
+    parse_phase_metadata_from_frontmatter "$FRONTMATTER" || parse_phase_metadata_from_markdown_table "$STATE_CONTENT" || true
+  fi
+fi
+
+# Keep declared current_phase and detected in_progress phase aligned.
+DECLARED_CURRENT_PHASE=$(echo "$FRONTMATTER" | grep '^current_phase:' | sed 's/current_phase: *//' || true)
+if [[ "$DECLARED_CURRENT_PHASE" =~ ^[0-9]+$ ]] && [[ "${CURRENT_PHASE_INDEX:- -1}" =~ ^[0-9]+$ ]] && [[ "$DECLARED_CURRENT_PHASE" -ne "$CURRENT_PHASE_INDEX" ]]; then
+  echo "Warning: current_phase index mismatch (declared=${DECLARED_CURRENT_PHASE}, detected=${CURRENT_PHASE_INDEX}); syncing." >&2
+  sync_current_phase_index_in_state "$SUPERPOWER_STATE_FILE" "$CURRENT_PHASE_INDEX"
+  STATE_CONTENT=$(awk 'NR==1{sub(/^\xef\xbb\xbf/,"")} {print}' "$SUPERPOWER_STATE_FILE")
+  FRONTMATTER=$(printf '%s\n' "$STATE_CONTENT" | sed -n '/^---$/,/^---$/{ /^---$/d; p; }')
+fi
+
 # Prefer hook-native last_assistant_message (newer Claude Code field).
 # Fallback to transcript parsing for older versions.
 LAST_OUTPUT=$(echo "$HOOK_INPUT" | jq -r '.last_assistant_message // ""')
@@ -402,38 +869,83 @@ if [[ -z "$LAST_OUTPUT" ]]; then
   fi
 fi
 
-# Check for completion promise (only if set)
-if [[ "$COMPLETION_PROMISE" != "null" ]] && [[ -n "$COMPLETION_PROMISE" ]]; then
-  # Extract text from first <promise>...</promise> tag only.
-  # Keep empty when tags are absent so legacy bare-line fallback can trigger.
-  PROMISE_TEXT=$(echo "$LAST_OUTPUT" | perl -0777 -ne '
-    if (/<promise>(.*?)<\/promise>/s) {
-      $v = $1;
-      $v =~ s/^\s+|\s+$//g;
-      $v =~ s/\s+/ /g;
-      print $v;
-    }
-  ' 2>/dev/null || true)
-  LAST_NON_EMPTY_LINE=$(printf '%s\n' "$LAST_OUTPUT" | awk 'NF{line=$0} END{print line}')
-  LAST_NON_EMPTY_LINE=$(echo "$LAST_NON_EMPTY_LINE" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+# Extract text from first <promise>...</promise> tag only.
+PROMISE_TEXT=$(echo "$LAST_OUTPUT" | perl -0777 -ne '
+  if (/<promise>(.*?)<\/promise>/s) {
+    $v = $1;
+    $v =~ s/^\s+|\s+$//g;
+    $v =~ s/\s+/ /g;
+    print $v;
+  }
+' 2>/dev/null || true)
+LAST_NON_EMPTY_LINE=$(printf '%s\n' "$LAST_OUTPUT" | awk 'NF{line=$0} END{print line}')
+LAST_NON_EMPTY_LINE=$(echo "$LAST_NON_EMPTY_LINE" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
 
-  # Use = for literal string comparison (not pattern matching)
-  # == in [[ ]] does glob pattern matching which breaks with *, ?, [ characters
-  if [[ -n "$PROMISE_TEXT" ]] && [[ "$PROMISE_TEXT" = "$COMPLETION_PROMISE" ]]; then
-    echo "Superpower loop: Detected <promise>$COMPLETION_PROMISE</promise>"
+PHASE_COMPLETION_SIGNAL=0
+PHASE_SIGNAL_REASON=""
+PHASE_VALIDATION_NOTE=""
+
+CURRENT_PHASE_LABEL="$(phase_label_from_index "${CURRENT_PHASE_INDEX:--1}")"
+
+if [[ -n "$CURRENT_PHASE_PROMISE" ]]; then
+  if output_has_explicit_promise_signal "$CURRENT_PHASE_PROMISE"; then
+    if phase_artifacts_ok "$CURRENT_PHASE_NAME"; then
+      PHASE_COMPLETION_SIGNAL=1
+      PHASE_SIGNAL_REASON="explicit-promise"
+    else
+      PHASE_VALIDATION_NOTE="Detected explicit signal for ${CURRENT_PHASE_NAME} but required artifacts are missing: ${PHASE_ARTIFACTS_MISSING}"
+      echo "Warning: ${PHASE_VALIDATION_NOTE}" >&2
+    fi
+  elif output_has_phase_completion_hint "$CURRENT_PHASE_LABEL" "$CURRENT_PHASE_NAME" "$CURRENT_PHASE_PROMISE"; then
+    if phase_artifacts_ok "$CURRENT_PHASE_NAME"; then
+      PHASE_COMPLETION_SIGNAL=1
+      PHASE_SIGNAL_REASON="heuristic-phase-complete"
+    else
+      PHASE_VALIDATION_NOTE="Detected heuristic completion hint for ${CURRENT_PHASE_NAME}, but artifacts are incomplete: ${PHASE_ARTIFACTS_MISSING}"
+      echo "Warning: ${PHASE_VALIDATION_NOTE}" >&2
+    fi
+  fi
+fi
+
+# Phase-level completion should advance the loop state even when model forgot
+# to manually edit docs/runtime/superpower-loop.local.md.
+if [[ "$PHASE_COMPLETION_SIGNAL" -eq 1 ]]; then
+  if [[ "$NEXT_PENDING_PHASE_INDEX" -ge 0 ]]; then
+    echo "Superpower loop: Phase '${CURRENT_PHASE_NAME}' completed (${PHASE_SIGNAL_REASON}), auto-advancing to phase index ${NEXT_PENDING_PHASE_INDEX}."
+    advance_phase_in_state_file "$SUPERPOWER_STATE_FILE" "$CURRENT_PHASE_INDEX" "$NEXT_PENDING_PHASE_INDEX"
+    STATE_CONTENT=$(awk 'NR==1{sub(/^\xef\xbb\xbf/,"")} {print}' "$SUPERPOWER_STATE_FILE")
+    FRONTMATTER=$(printf '%s\n' "$STATE_CONTENT" | sed -n '/^---$/,/^---$/{ /^---$/d; p; }')
+    parse_phase_metadata_from_frontmatter "$FRONTMATTER" || parse_phase_metadata_from_markdown_table "$STATE_CONTENT" || true
+  else
+    echo "Superpower loop: Final phase '${CURRENT_PHASE_NAME}' completed (${PHASE_SIGNAL_REASON})."
     rm -f "$SUPERPOWER_STATE_FILE"
     prune_registry_path "$SUPERPOWER_STATE_FILE"
     exit 0
   fi
+fi
 
-  # Backward compatibility:
-  # Some model turns may output bare completion text without <promise> tags.
-  # Accept only when the LAST non-empty line is an exact literal match.
-  if [[ -z "$PROMISE_TEXT" ]] && [[ "$LAST_NON_EMPTY_LINE" = "$COMPLETION_PROMISE" ]]; then
-    echo "Superpower loop: Detected legacy completion line '$COMPLETION_PROMISE' (without <promise> tag)"
+GLOBAL_COMPLETION_SIGNAL=0
+if [[ "$COMPLETION_PROMISE" != "null" ]] && [[ -n "$COMPLETION_PROMISE" ]]; then
+  if output_has_explicit_promise_signal "$COMPLETION_PROMISE"; then
+    GLOBAL_COMPLETION_SIGNAL=1
+  elif output_has_global_completion_hint; then
+    # Heuristic global completion requires delivery-check artifacts in final stage.
+    if phase_artifacts_ok "delivery-checker"; then
+      GLOBAL_COMPLETION_SIGNAL=1
+    fi
+  fi
+fi
+
+# Global completion promise can terminate only when loop is truly at final phase
+# (or non-phase legacy mode). This prevents accidental early DELIVERY_COMPLETE.
+if [[ "$GLOBAL_COMPLETION_SIGNAL" -eq 1 ]]; then
+  if [[ -z "$CURRENT_PHASE_PROMISE" ]] || [[ "$CURRENT_PHASE_PROMISE" = "$COMPLETION_PROMISE" ]] || [[ "$NEXT_PENDING_PHASE_INDEX" -lt 0 ]]; then
+    echo "Superpower loop: Detected global completion '$COMPLETION_PROMISE'."
     rm -f "$SUPERPOWER_STATE_FILE"
     prune_registry_path "$SUPERPOWER_STATE_FILE"
     exit 0
+  else
+    echo "Warning: Ignoring early global completion '$COMPLETION_PROMISE' while current phase is '${CURRENT_PHASE_NAME}'." >&2
   fi
 fi
 
@@ -448,42 +960,6 @@ PROMPT_TEXT=$(printf '%s\n' "$STATE_CONTENT" | awk '/^---$/{i++; next} i>=2')
 SKILL_RESOLUTION_ERROR=0
 if echo "$LAST_OUTPUT" | grep -Eqi "Unknown skill:|not available as a standalone skill|Agent type .* not found"; then
   SKILL_RESOLUTION_ERROR=1
-fi
-
-# Derive in-progress phase from YAML frontmatter first.
-CURRENT_PHASE_NAME=$(echo "$FRONTMATTER" | awk '
-  /- name:/ { name=$3; gsub(/"/, "", name); next }
-  /status:[[:space:]]*"in_progress"/ { print name; exit }
-')
-CURRENT_PHASE_PROMISE=$(echo "$FRONTMATTER" | awk '
-  /- name:/ { name=$3; gsub(/"/, "", name); next }
-  /status:[[:space:]]*"in_progress"/ { in_progress=1; next }
-  in_progress && /completion_promise:/ {
-    sub(/.*completion_promise:[[:space:]]*/, "", $0);
-    gsub(/"/, "", $0);
-    print $0;
-    exit
-  }
-')
-
-# Fallback: derive in-progress phase from markdown phase table.
-if [[ -z "$CURRENT_PHASE_NAME" ]]; then
-  CURRENT_PHASE_NAME=$(printf '%s\n' "$STATE_CONTENT" | awk -F'|' '
-    /^\|[[:space:]]*[0-9]+[[:space:]]*\|/ {
-      name=$3; status=$4;
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", name);
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", status);
-      if (status=="in_progress") { print name; exit }
-    }
-  ')
-  CURRENT_PHASE_PROMISE=$(printf '%s\n' "$STATE_CONTENT" | awk -F'|' '
-    /^\|[[:space:]]*[0-9]+[[:space:]]*\|/ {
-      status=$4; promise=$5;
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", status);
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", promise);
-      if (status=="in_progress") { print promise; exit }
-    }
-  ')
 fi
 
 # Synthesize continuation prompt for loop-state files (YAML-only or markdown table).
@@ -529,6 +1005,14 @@ SKILL RESOLUTION RECOVERY:
   1) Read the local SKILL.md for the current phase.
   2) Follow it strictly.
   3) Continue pipeline progression without asking user to restart."
+fi
+
+if [[ -n "${PHASE_VALIDATION_NOTE:-}" ]]; then
+  PROMPT_TEXT="${PROMPT_TEXT}
+
+PHASE COMPLETION BLOCKED:
+- ${PHASE_VALIDATION_NOTE}
+- Please finish missing artifacts first, then output the phase completion promise again."
 fi
 
 # Update iteration in frontmatter (portable across macOS and Linux)

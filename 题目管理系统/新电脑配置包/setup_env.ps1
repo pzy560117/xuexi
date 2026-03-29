@@ -116,7 +116,12 @@ if (Test-Path $sourceSettings) {
     }
 
     if ($Force) {
-        $settingsJson = Get-Content -Raw -Path $sourceSettings | ConvertFrom-Json
+        $settingsRaw = Get-Content -Raw -Path $sourceSettings
+        if ((Get-Command ConvertFrom-Json).Parameters.ContainsKey('Depth')) {
+            $settingsJson = $settingsRaw | ConvertFrom-Json -Depth 20
+        } else {
+            $settingsJson = $settingsRaw | ConvertFrom-Json
+        }
         
         # 动态将绝对路径填入 xuexi-local
         if ($settingsJson.extraKnownMarketplaces.'xuexi-local') {

@@ -66,6 +66,18 @@ claude --print "/superpowers:prompt2repo prompt.md --skip-package"
 
 可选：如果需要跳过 Phase 3 自测审查，可额外加 `--skip-review`；质量门禁可按需跳过（如 `--skip-test-gate`、`--skip-runtime-smoke`、`--skip-stability-loop`、`--skip-coverage-gate`、`--skip-policy-gate`），默认不建议跳过。
 
+## Hook 运行模式（推荐）
+
+插件已支持运行时 Hook 档位开关：
+
+- `ECC_HOOK_PROFILE=minimal|standard|strict`（默认 `standard`）
+- `ECC_DISABLED_HOOKS=hook-id-1,hook-id-2`
+
+建议：
+- 日常开发：`standard`
+- 回归验收：`strict`
+- 排障定位：`minimal`
+
 ## 跨项目一键使用（Git Bash）
 
 已配置全局别名 `p2r-auto`，在任意新项目目录可直接执行：

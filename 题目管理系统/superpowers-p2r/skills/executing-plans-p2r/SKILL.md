@@ -1,9 +1,34 @@
 ﻿---
 name: executing-plans-p2r
 description: "Prompt2Repo Phase 2: 按任务计划生成完整项目代码，BDD驱动+Docker生成+英文检查+工程质量内置检查，支持 Ralph-Loop"
+argument-hint: []
+user-invocable: false
+allowed-tools: []
 ---
 
 # Executing Plans — Prompt2Repo Phase 2
+
+## Superpower Loop Integration
+
+本 Skill 在 Prompt2Repo 主流程 Ralph-Loop 内运行，**禁止**二次启动 `setup-superpower-loop.sh`。
+
+**CRITICAL**: 输出 `<promise>EXECUTION_COMPLETE</promise>` 时必须遵守：
+- 所有任务标记为 `done`
+- 项目代码完整可运行
+- 测试、Docker、README 全部生成
+
+**ABSOLUTE LAST OUTPUT RULE**: Promise 标签必须是回复的**最后一行**，后面不得有任何内容。
+
+## Background Knowledge
+
+**核心概念**: 代码执行阶段是“把设计变为现实”的核心环节，优先采用 Agent Team 并行实现。
+
+- **MANDATORY**: 优先采用并行 Implementer 子代理，失败自动降级为串行执行
+- **MANDATORY**: 每个 Implementer 拥有独立的文件所有权，禁止跨代理写
+- **MANDATORY**: 每批任务完成后必须执行 Reviewer 交叉检查
+- **MANDATORY**: 英文 Prompt 场景下产物绝对不能出现中文字符
+- **PROHIBITED**: 不得硬编码不存在的 agent type
+- **PROHIBITED**: 不得跳过工程质量内置检查
 
 ## 概述
 
@@ -30,30 +55,53 @@ description: "Prompt2Repo Phase 2: 按任务计划生成完整项目代码，BDD
 
 ## 执行规则
 
-### 每个任务的执行流程（优先并发子代理，失败自动降级）
+### 每个任务的执行流程（Agent Team 并行模式，失败自动降级）
 
-优先采用 **并行任务执行 (Parallel Task Execution)** 拉起专业子代理协作：
+优先采用 **Agent Team 并行执行**（参考 `skills/agent-team-driven-development/SKILL.md`）：
+
+#### 🔀 并行任务分派（Team Lead 职责）
+
+**Phase 2 开始时**，Team Lead（主代理）须执行以下分派逻辑：
+
+1. **分析任务依赖图**：读取 `docs/plans/_index.md`，识别无依赖关系的独立任务组
+2. **Spawn Implementer 子代理**：为每组独立任务创建 Implementer，每个 Implementer 分配 5-6 个任务
+3. **文件所有权隔离**：每个 Implementer 负责独立的文件/模块，**严禁跨代理编辑同一文件**
+4. **上下文注入**：每个 Implementer spawn 时必须提供：
+   - 分配的任务文件路径列表
+   - 负责的源文件/模块范围
+   - 项目编码规范（`CLAUDE.md` / coding standards）
+   - TDD 要求：`Red-Green-Refactor` 循环
+
+**Implementer 子代理 Spawn 示例**：
+```
+你是 Implementer-Backend。
+1. 读取 CLAUDE.md 了解项目规范。
+2. 依次执行 task-001, task-002, task-003。
+3. 遵循 TDD：先写失败测试(RED) → 写实现(GREEN) → 重构。
+4. 你只能编辑: src/api/, src/models/, unit_tests/test_api/。
+5. 完成每个任务后运行验证步骤并报告结果。
+```
+
+#### 🔍 Reviewer 交叉检查（每批任务完成后）
+
+每个 Implementer 完成分配的任务后，Spawn **Reviewer 子代理** 进行交叉审查：
+
+```
+你是 Reviewer。
+1. 检查 Implementer-Backend 的代码变更 (git diff)。
+2. 验证是否遵循 TDD（测试先于实现）。
+3. 检查代码质量（错误处理/日志/输入校验）。
+4. 检查安全问题（SQL注入/XSS/密钥暴露）。
+5. 提供具体的改进建议。
+```
+
 - **TDD 导师职责**：先读取 `skills/tdd-guide/SKILL.md`，主导 `Red-Green-Refactor` 循环。
 - **构建修复职责**：先读取 `skills/build-error-resolver/SKILL.md`，在编译/类型错误出现时快速修复。
 
-兼容性要求（必须遵守）：
+**兼容性要求（必须遵守）**：
 - agent 类型必须使用当前环境可用列表（如 `Plan` / `Explore` / `general-purpose`），**禁止硬编码不存在的类型**。
-- 若并行子代理不可用或创建失败，**必须自动降级为主线程继续执行上述职责**，不得中断 Phase。
-
-```
-1. 读取 task-NNN-*.md
-2. 检查前置依赖是否完成
-3. 测试先行（如果任务包含测试要求）：
-   a. 先写测试文件（放到 unit_tests/ 或 API_tests/ 对应目录）
-   b. 运行测试 → 预期失败（RED）
-   c. 写实现代码
-   d. 运行测试 → 预期通过（GREEN）
-4. 执行验证步骤
-5. 质量检查（见下方）
-6. 语言检查（见下方）
-7. 在 _index.md 中标记为 done
-8. 进入下一个任务
-```
+- 若 Agent Team 不可用或创建失败，**必须自动降级为主线程串行执行**，不得中断 Phase。
+- 降级时仍须执行完整的 TDD 流程和质量检查。
 
 ### 工程质量内置检查（每个任务完成后）
 
@@ -263,7 +311,7 @@ echo All tests completed.
 2. 找到第一个 `pending` 状态的任务
 3. 执行该任务
 
-## 完成条件
+## Exit Criteria
 
 当以下全部满足时，Phase 2 完成：
 - `docs/plans/_index.md` 中所有任务标记为 `done`
@@ -274,6 +322,13 @@ echo All tests completed.
 - Docker 配置已生成（如适用）
 - 英文 Prompt 场景下全部产物无中文字符
 
-输出 `<promise>EXECUTION_COMPLETE</promise>` 标记完成，且该标签必须是回复最后一行（后面不得有任何内容）。
+输出 `<promise>EXECUTION_COMPLETE</promise>`，且该标签必须是回复最后一行。
+
+## References
+
+- `../agent-team-driven-development/SKILL.md` - Agent Team 协作框架
+- `../agent-team-driven-development/references/` - 子代理通信模板
+- `../code-reviewer/SKILL.md` - 代码审查子代理
+- `../../skills/references/completion-promises.md` - Promise 设计规范
 
 

@@ -1,9 +1,32 @@
 ---
 name: prompt-parser
 description: "Prompt2Repo Phase 0: 自动解析 prompt.md，提取结构化需求清单、项目类型、技术栈、隐含约束，检测 Docker/SMTP/语言红线"
+argument-hint: [prompt.md]
+user-invocable: false
+allowed-tools: []
 ---
 
 # Prompt Parser — Prompt2Repo Phase 0
+
+## Superpower Loop Integration
+
+本 Skill 在 Prompt2Repo 主流程 Ralph-Loop 内运行，**禁止**二次启动 `setup-superpower-loop.sh`。
+
+**CRITICAL**: 输出 `<promise>PROMPT_PARSING_COMPLETE</promise>` 时必须遵守：
+- 所有产出文件全部生成
+- 语言检测、项目类型识别、需求提取全部完成
+
+**ABSOLUTE LAST OUTPUT RULE**: Promise 标签必须是回复的**最后一行**，后面不得有任何内容。
+
+## Background Knowledge
+
+**核心概念**: Prompt Parser 是流水线的起点，负责将非结构化的自然语言需求转化为结构化的工程制品。
+
+- **MANDATORY**: 读取 prompt.md 必须是第一个动作
+- **MANDATORY**: 英文 Prompt 的所有后续产物绝对禁止出现中文字符
+- **MANDATORY**: 隐含约束（鉴权/校验/日志/安全）必须主动提取
+- **PROHIBITED**: 不得跳过语言检测步骤
+- **PROHIBITED**: 不得在未完成全部分析时输出 Promise
 
 ## 概述
 
@@ -194,7 +217,7 @@ STRICT — {说明}
 
 在 Phase 0 阶段，将解析 Prompt 时发现的业务逻辑疑问记录到此文件。
 
-## 完成条件
+## Exit Criteria
 
 当以下文件全部生成后，Phase 0 完成：
 - `docs/designs/_meta.md`
@@ -202,4 +225,8 @@ STRICT — {说明}
 - `metadata.draft.json`
 - `questions.md`
 
-输出 `PROMPT_PARSING_COMPLETE` 标记完成。
+输出 `<promise>PROMPT_PARSING_COMPLETE</promise>`，且该标签必须是回复最后一行。
+
+## References
+
+- `../../skills/references/completion-promises.md` - Promise 设计规范

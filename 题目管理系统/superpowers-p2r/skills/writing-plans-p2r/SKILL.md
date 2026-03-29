@@ -1,9 +1,33 @@
 ---
 name: writing-plans-p2r
 description: "Prompt2Repo Phase 1: 基于需求分析生成 BDD 行为规格+架构设计+Docker计划+测试结构+任务计划，内嵌全部验收标准"
+argument-hint: []
+user-invocable: false
+allowed-tools: []
 ---
 
 # Writing Plans — Prompt2Repo Phase 1
+
+## Superpower Loop Integration
+
+本 Skill 在 Prompt2Repo 主流程 Ralph-Loop 内运行，**禁止**二次启动 `setup-superpower-loop.sh`。
+
+**CRITICAL**: 输出 `<promise>PLANNING_COMPLETE</promise>` 时必须遵守：
+- BDD 规格、架构设计、最佳实践文档、任务计划全部生成
+- 每个任务包含验收维度映射
+
+**ABSOLUTE LAST OUTPUT RULE**: Promise 标签必须是回复的**最后一行**，后面不得有任何内容。
+
+## Background Knowledge
+
+**核心概念**: 设计规划是“从需求到可执行任务”的桥梁，确保每个任务都有明确目标、输入输出和验收标准。
+
+- **MANDATORY**: BDD 场景必须标注验收维度编号
+- **MANDATORY**: 安全/鉴权场景不可省略
+- **MANDATORY**: 每个任务拆分为 2-5 分钟可执行单元
+- **MANDATORY**: 优先采用并行任务执行拉起子代理，失败自动降级
+- **PROHIBITED**: 不得硬编码不存在的 agent type
+- **PROHIBITED**: 不得省略异常路径场景（401/403/404/409/422）
 
 ## 概述
 
@@ -210,7 +234,7 @@ npm test -- --grep "auth"
 ...
 ```
 
-## 完成条件
+## Exit Criteria
 
 当以下文件全部生成后，Phase 1 完成：
 - `docs/designs/bdd-specs.md`
@@ -219,4 +243,10 @@ npm test -- --grep "auth"
 - `docs/plans/_index.md`
 - `docs/plans/task-001-*.md` ~ `docs/plans/task-NNN-*.md`
 
-输出 `PLANNING_COMPLETE` 标记完成。
+输出 `<promise>PLANNING_COMPLETE</promise>`，且该标签必须是回复最后一行。
+
+## References
+
+- `../architect/SKILL.md` - 架构子代理规则
+- `../planner/SKILL.md` - 任务拆分子代理规则
+- `../../skills/references/completion-promises.md` - Promise 设计规范

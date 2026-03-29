@@ -222,11 +222,33 @@ started_at: "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 $PROMPT
 EOF
 
+# Write a bootstrap confirmation artifact for troubleshooting and audits.
+# This file is intentionally lightweight and human-readable.
+BOOTSTRAP_FILE=".claude/superpower-loop.bootstrap.md"
+cat > "$BOOTSTRAP_FILE" <<EOF
+# Superpower Loop Bootstrap Confirmation
+
+- started_at_utc: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+- working_directory: $(pwd)
+- state_file: $STATE_FILE
+- completion_promise: $(if [[ "$COMPLETION_PROMISE" != "null" ]]; then echo "$COMPLETION_PROMISE"; else echo "null"; fi)
+- max_iterations: $MAX_ITERATIONS
+- session_id: ${SESSION_ID:-}
+- source: setup-superpower-loop.sh
+
+## Initial Prompt
+
+\`\`\`text
+$PROMPT
+\`\`\`
+EOF
+
 # Output setup message
 cat <<EOF
 Superpower loop activated in this session!
 
 State file: $STATE_FILE
+Bootstrap confirmation: $BOOTSTRAP_FILE
 Iteration: 1
 Max iterations: $(if [[ $MAX_ITERATIONS -gt 0 ]]; then echo $MAX_ITERATIONS; else echo "unlimited"; fi)
 Completion promise: $(if [[ "$COMPLETION_PROMISE" != "null" ]]; then echo "${COMPLETION_PROMISE//\"/} (ONLY output when TRUE - do not lie!)"; else echo "none (runs forever)"; fi)

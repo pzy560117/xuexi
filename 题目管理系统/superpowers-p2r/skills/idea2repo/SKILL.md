@@ -117,6 +117,22 @@ description: "Idea2Repo 一键入口: 从模糊的 idea 出发，自动经过头
 
 按顺序调用以下 Skills：
 
+### 0. Loop Bootstrap（必须，先于 Phase 0）
+
+```
+如当前工作目录不存在 `.claude/superpower-loop.local.md`：
+立即执行：
+"${CLAUDE_PLUGIN_ROOT}/scripts/setup-superpower-loop.sh" \
+  "Execute Idea2Repo pipeline for idea: <传入的 idea>" \
+  --completion-promise "DELIVERY_COMPLETE" \
+  --max-iterations ${max_iterations:-100} \
+  --state-file ".claude/superpower-loop.local.md"
+
+执行后必须确认以下文件已生成：
+- `.claude/superpower-loop.local.md`（循环状态文件）
+- `.claude/superpower-loop.bootstrap.md`（启动确认文档）
+```
+
 ### 1. Phase 0
 
 ```
@@ -213,14 +229,19 @@ description: "Idea2Repo 一键入口: 从模糊的 idea 出发，自动经过头
 
 ## Ralph-Loop 配置
 
-本 Skill 使用 Ralph-Loop 的**多阶段模式**，但以 `brainstorming` 作为起点：
+本 Skill 使用 Ralph-Loop 的**多阶段模式**，但以 `brainstorming` 作为起点，且必须在 Phase 0 前完成 bootstrap：
 
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/scripts/setup-superpower-loop.sh" \
-  "Execute Idea2Repo pipeline for idea: $ARGUMENTS" \
+  "Execute Idea2Repo pipeline for idea: <传入的 idea>" \
   --completion-promise "DELIVERY_COMPLETE" \
-  --max-iterations ${max_iterations:-100}
+  --max-iterations ${max_iterations:-100} \
+  --state-file ".claude/superpower-loop.local.md"
 ```
+
+Bootstrap 成功判据：
+- `.claude/superpower-loop.local.md` 存在
+- `.claude/superpower-loop.bootstrap.md` 存在
 
 ### 状态文件设计
 

@@ -128,7 +128,8 @@ PHASE_NAMES=(
   "llm-test-iteration-2" "llm-test-iteration-3" "llm-triple-check-gate"
   "test-truth-gate" "delivery-packager" "post-package-test-iteration-1"
   "post-package-test-iteration-2" "post-package-test-iteration-3"
-  "post-package-triple-check-gate" "artifact-truth-gate" "delivery-checker"
+  "post-package-triple-check-gate" "artifact-truth-gate" "toolchain-validator-gate"
+  "delivery-checker" "release-readiness-gate"
 )
 PHASE_PROMISES=(
   "PROMPT_PARSING_COMPLETE" "SPEC_COMPLETE" "PLANNING_COMPLETE" "ANALYSIS_COMPLETE"
@@ -136,14 +137,15 @@ PHASE_PROMISES=(
   "LLM_TEST_R2_COMPLETE" "LLM_TEST_R3_COMPLETE" "LLM_TRIPLE_CHECK_COMPLETE"
   "TEST_TRUTH_COMPLETE" "PACKAGE_COMPLETE" "POST_PACKAGE_TEST_R1_COMPLETE"
   "POST_PACKAGE_TEST_R2_COMPLETE" "POST_PACKAGE_TEST_R3_COMPLETE"
-  "POST_PACKAGE_TRIPLE_CHECK_COMPLETE" "ARTIFACT_TRUTH_COMPLETE" "DELIVERY_COMPLETE"
+  "POST_PACKAGE_TRIPLE_CHECK_COMPLETE" "ARTIFACT_TRUTH_COMPLETE" "TOOLCHAIN_VALIDATOR_COMPLETE"
+  "DELIVERY_CHECK_COMPLETE" "DELIVERY_COMPLETE"
 )
 PHASE_SKIPPABLE=(
   "no" "yes" "no" "yes"
   "no" "yes" "yes" "no"
   "no" "no" "no"
   "no" "yes" "no"
-  "no" "no" "no" "no" "no"
+  "no" "no" "no" "no" "no" "no" "no"
 )
 
 # =============================================================================
@@ -249,7 +251,9 @@ phase_index_from_name() {
     "post-package-test-iteration-3"|"post package test iteration 3"|"post-package-r3"|"post package r3") echo 15 ;;
     "post-package-triple-check-gate"|"post package triple check gate"|"post-package-gate"|"post package gate") echo 16 ;;
     "artifact-truth-gate"|"artifact truth gate"|"artifact-truth"|"artifact truth") echo 17 ;;
-    "delivery-checker"|"delivery checker") echo 18 ;;
+    "toolchain-validator-gate"|"toolchain validator gate"|"toolchain-validator"|"toolchain validator") echo 18 ;;
+    "delivery-checker"|"delivery checker") echo 19 ;;
+    "release-readiness-gate"|"release readiness gate"|"release-readiness"|"release readiness") echo 20 ;;
     *)
       return 1
       ;;
@@ -393,7 +397,9 @@ recover_state_from_legacy_status_markdown() {
     "Phase 4.3 (post-package-test-iteration-3)") phase_idx=15 ;;
     "Phase 4.4 (post-package-triple-check-gate)") phase_idx=16 ;;
     "Phase 4.5 (artifact-truth-gate)") phase_idx=17 ;;
-    "Phase 4.6 (delivery-checker)"|"Phase 4.5 (delivery-checker)") phase_idx=18 ;;
+    "Phase 4.55 (toolchain-validator-gate)"|"Phase 4.55 (toolchain-validator)"|"Phase 4.55 (toolchain validator gate)") phase_idx=18 ;;
+    "Phase 4.6 (delivery-checker)"|"Phase 4.5 (delivery-checker)") phase_idx=19 ;;
+    "Phase 4.7 (release-readiness-gate)"|"Phase 4.7 (release-readiness)"|"Phase 4.7 (release readiness gate)") phase_idx=20 ;;
     *) return 1 ;;
   esac
   local state_path="$SUPERPOWER_STATE_FILE"
@@ -757,7 +763,9 @@ phase_label_from_index() {
     15) echo "Phase 4.3" ;;
     16) echo "Phase 4.4" ;;
     17) echo "Phase 4.5" ;;
-    18) echo "Phase 4.6" ;;
+    18) echo "Phase 4.55" ;;
+    19) echo "Phase 4.6" ;;
+    20) echo "Phase 4.7" ;;
     *) echo "" ;;
   esac
 }
@@ -827,6 +835,19 @@ report_no_contradiction_ok() {
 delivery_checker_report_ok() {
   local report_file="$1"
   [[ -f "$report_file" ]] || return 1
+  grep -Eiq 'Result:[[:space:]]*PASS=[0-9]+,[[:space:]]*WARN=[0-9]+,[[:space:]]*FAIL=[0-9]+' "$report_file" || return 1
+  grep -Eiq 'VALIDATE_PACKAGE_EXIT_CODE:[[:space:]]*[0-9]+' "$report_file" || return 1
+  grep -Eiq 'DOCKER_UP_EXIT_CODE:[[:space:]]*[0-9]+' "$report_file" || return 1
+  grep -Eiq 'DOCKER_SERVICES_HEALTH_EXIT_CODE:[[:space:]]*[0-9]+' "$report_file" || return 1
+  grep -Eiq 'RUN_TESTS_EXIT_CODE:[[:space:]]*[0-9]+' "$report_file" || return 1
+  grep -Eiq 'RUN_TESTS_SCRIPT_LINT_EXIT_CODE:[[:space:]]*[0-9]+' "$report_file" || return 1
+  grep -Eiq 'VERIFIER_SIGNATURE:[[:space:]]*[0-9a-f]{32,}' "$report_file" || return 1
+  return 0
+}
+
+release_readiness_report_ok() {
+  local report_file="$1"
+  [[ -f "$report_file" ]] || return 1
   grep -Eiq 'FAIL[=:][[:space:]]*0|FAIL\)[[:space:]]*:?[[:space:]]*0' "$report_file" || return 1
   grep -Eiq 'VALIDATE_PACKAGE_EXIT_CODE:[[:space:]]*0' "$report_file" || return 1
   grep -Eiq 'DOCKER_UP_EXIT_CODE:[[:space:]]*0' "$report_file" || return 1
@@ -836,6 +857,22 @@ delivery_checker_report_ok() {
   grep -Eiq 'VERIFIER_SIGNATURE:[[:space:]]*[0-9a-f]{32,}' "$report_file" || return 1
   report_no_contradiction_ok "$report_file" || return 1
   return 0
+}
+
+release_readiness_json_ok() {
+  local json_file="$1"
+  [[ -f "$json_file" ]] || return 1
+  if ! command -v jq >/dev/null 2>&1; then
+    return 1
+  fi
+  jq -e '
+    .fail == 0 and
+    .hard_evidence.validate_package_exit_code == 0 and
+    .hard_evidence.docker_up_exit_code == 0 and
+    .hard_evidence.docker_services_health_exit_code == 0 and
+    .hard_evidence.run_tests_script_lint_exit_code == 0 and
+    .hard_evidence.run_tests_exit_code == 0
+  ' "$json_file" >/dev/null 2>&1
 }
 
 phase_artifacts_ok() {
@@ -973,13 +1010,36 @@ phase_artifacts_ok() {
       report_pass_marker_ok ".tmp/artifact-truth-gate.md" || missing+=(".tmp/artifact-truth-gate.md(FINAL_VERDICT: PASS)")
       report_no_contradiction_ok ".tmp/artifact-truth-gate.md" || missing+=(".tmp/artifact-truth-gate.md(no-contradiction)")
       ;;
+    "toolchain-validator-gate")
+      local d_tv
+      d_tv="$(latest_task_dir)"
+      [[ -n "$d_tv" ]] || missing+=("TASK-*")
+      [[ -f ".tmp/toolchain-validator-gate.md" ]] || missing+=(".tmp/toolchain-validator-gate.md")
+      report_pass_marker_ok ".tmp/toolchain-validator-gate.md" || missing+=(".tmp/toolchain-validator-gate.md(FINAL_VERDICT: PASS)")
+      grep -Eiq 'RG_AVAILABLE:[[:space:]]*PASS' ".tmp/toolchain-validator-gate.md" || missing+=(".tmp/toolchain-validator-gate.md(RG_AVAILABLE: PASS)")
+      grep -Eiq 'VALIDATE_PACKAGE_SCRIPT:[[:space:]]*PASS' ".tmp/toolchain-validator-gate.md" || missing+=(".tmp/toolchain-validator-gate.md(VALIDATE_PACKAGE_SCRIPT: PASS)")
+      ;;
     "delivery-checker")
       local d2
       d2="$(latest_task_dir)"
       [[ -n "$d2" ]] || missing+=("TASK-*")
       repo_test_dirs_ok "$d2" || missing+=("TASK-*/repo/(tests/)unit_tests + API_tests")
       [[ -n "$d2" && -f "$d2/docs/delivery-check-report.md" ]] || missing+=("TASK-*/docs/delivery-check-report.md")
-      delivery_checker_report_ok "$d2/docs/delivery-check-report.md" || missing+=("TASK-*/docs/delivery-check-report.md(FAIL=0 + hard-evidence)")
+      [[ -n "$d2" && -f "$d2/docs/delivery-check-result.json" ]] || missing+=("TASK-*/docs/delivery-check-result.json")
+      delivery_checker_report_ok "$d2/docs/delivery-check-report.md" || missing+=("TASK-*/docs/delivery-check-report.md(hard-evidence-present)")
+      ;;
+    "release-readiness-gate")
+      local d_rr
+      d_rr="$(latest_task_dir)"
+      [[ -n "$d_rr" ]] || missing+=("TASK-*")
+      [[ -f ".tmp/release-readiness-gate.md" ]] || missing+=(".tmp/release-readiness-gate.md")
+      report_pass_marker_ok ".tmp/release-readiness-gate.md" || missing+=(".tmp/release-readiness-gate.md(FINAL_VERDICT: PASS)")
+      [[ -n "$d_rr" && -f "$d_rr/docs/delivery-check-report.md" ]] || missing+=("TASK-*/docs/delivery-check-report.md")
+      [[ -n "$d_rr" && -f "$d_rr/docs/delivery-check-result.json" ]] || missing+=("TASK-*/docs/delivery-check-result.json")
+      release_readiness_report_ok "$d_rr/docs/delivery-check-report.md" || missing+=("TASK-*/docs/delivery-check-report.md(FAIL=0 + strict-evidence)")
+      if [[ -n "$d_rr" ]] && [[ -f "$d_rr/docs/delivery-check-result.json" ]]; then
+        release_readiness_json_ok "$d_rr/docs/delivery-check-result.json" || missing+=("TASK-*/docs/delivery-check-result.json(FAIL=0 + strict-evidence)")
+      fi
       ;;
     *)
       ;;
@@ -1137,20 +1197,48 @@ AUTO-REPAIR PLAN (Phase 4.5):
 4) If mismatch exists, return to corresponding post-package iteration and rerun.
 EOF
       ;;
+    "toolchain-validator-gate")
+      cat <<'EOF'
+AUTO-REPAIR PLAN (Phase 4.55):
+1) Validate toolchain and validator script on latest TASK-* package.
+2) Ensure .tmp/toolchain-validator-gate.md contains:
+   FINAL_VERDICT: PASS
+   RG_AVAILABLE: PASS
+   VALIDATE_PACKAGE_SCRIPT: PASS
+3) If rg/validator path is missing, auto-repair in this phase and re-check.
+4) Do NOT ask user for confirmation; repair and retry now.
+EOF
+      ;;
     "delivery-checker")
       cat <<'EOF'
 AUTO-REPAIR PLAN (Phase 4.6):
 1) Run ${CLAUDE_PLUGIN_ROOT}/scripts/verify-delivery-package.sh against latest TASK-*.
 2) Ensure report exists at TASK-*/docs/delivery-check-report.md.
-3) Verify report has FAIL=0 and hard evidence lines:
-   VALIDATE_PACKAGE_EXIT_CODE: 0
-   DOCKER_UP_EXIT_CODE: 0
-   DOCKER_SERVICES_HEALTH_EXIT_CODE: 0
-   RUN_TESTS_SCRIPT_LINT_EXIT_CODE: 0
-   RUN_TESTS_EXIT_CODE: 0
+3) Verify report contains hard evidence lines and signature:
+   VALIDATE_PACKAGE_EXIT_CODE: <number>
+   DOCKER_UP_EXIT_CODE: <number>
+   DOCKER_SERVICES_HEALTH_EXIT_CODE: <number>
+   RUN_TESTS_SCRIPT_LINT_EXIT_CODE: <number>
+   RUN_TESTS_EXIT_CODE: <number>
    VERIFIER_SIGNATURE: <sha256>
 4) If not satisfied, fix issues and rerun delivery-checker in current phase.
 5) Do NOT ask user for confirmation; repair and retry now.
+EOF
+      ;;
+    "release-readiness-gate")
+      cat <<'EOF'
+AUTO-REPAIR PLAN (Phase 4.7):
+1) Read latest TASK-*/docs/delivery-check-report.md.
+2) Enforce strict release rule: FAIL=0.
+3) Ensure strict hard evidence are all 0:
+   VALIDATE_PACKAGE_EXIT_CODE
+   DOCKER_UP_EXIT_CODE
+   DOCKER_SERVICES_HEALTH_EXIT_CODE
+   RUN_TESTS_SCRIPT_LINT_EXIT_CODE
+   RUN_TESTS_EXIT_CODE
+4) Also verify TASK-*/docs/delivery-check-result.json with same strict rule.
+5) Generate .tmp/release-readiness-gate.md with FINAL_VERDICT: PASS only when all checks are green.
+6) Do NOT ask user for confirmation; repair and retry now.
 EOF
       ;;
     *)
@@ -1518,8 +1606,11 @@ if [[ "$COMPLETION_PROMISE" != "null" ]] && [[ -n "$COMPLETION_PROMISE" ]]; then
   if output_has_explicit_promise_signal "$COMPLETION_PROMISE"; then
     GLOBAL_COMPLETION_SIGNAL=1
   elif output_has_global_completion_hint; then
-    # Heuristic global completion requires delivery-check artifacts in final stage.
-    if phase_artifacts_ok "delivery-checker"; then
+    # Heuristic global completion requires release-readiness artifacts in final stage.
+    if phase_artifacts_ok "release-readiness-gate"; then
+      GLOBAL_COMPLETION_SIGNAL=1
+    # Backward compatibility: old pipelines may not have release-readiness phase.
+    elif phase_artifacts_ok "delivery-checker"; then
       GLOBAL_COMPLETION_SIGNAL=1
     fi
   fi

@@ -1,6 +1,6 @@
 ---
 name: delivery-checker
-description: "Prompt2Repo Phase 4.6: 对 TASK 交付包执行最终自动验收，强制校验 validate_package + docker up + run_tests 硬证据"
+description: "Prompt2Repo Phase 4.6: 对 TASK 交付包执行最终自动验收并产出完整证据报告，为最终放行门禁提供依据"
 argument-hint: [--task-id]
 user-invocable: false
 allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/scripts/verify-delivery-package.sh:*)"]
@@ -12,16 +12,15 @@ allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/scripts/verify-delivery-package.sh:*
 
 本 Skill 在 Prompt2Repo 主流程 Ralph-Loop 内运行，**禁止**二次启动 `setup-superpower-loop.sh`。
 
-**CRITICAL**: 输出 `<promise>DELIVERY_COMPLETE</promise>` 前必须满足：
+**CRITICAL**: 输出 `<promise>DELIVERY_CHECK_COMPLETE</promise>` 前必须满足：
 - 已执行 `${CLAUDE_PLUGIN_ROOT}/scripts/verify-delivery-package.sh`
 - 已生成 `TASK-{ID}/docs/delivery-check-report.md`
-- 报告中 `FAIL=0`
-- 报告中硬证据均为 0：
-  - `VALIDATE_PACKAGE_EXIT_CODE: 0`
-  - `DOCKER_UP_EXIT_CODE: 0`
-  - `DOCKER_SERVICES_HEALTH_EXIT_CODE: 0`
-  - `RUN_TESTS_SCRIPT_LINT_EXIT_CODE: 0`
-  - `RUN_TESTS_EXIT_CODE: 0`
+- 报告中包含硬证据字段：
+  - `VALIDATE_PACKAGE_EXIT_CODE: <number>`
+  - `DOCKER_UP_EXIT_CODE: <number>`
+  - `DOCKER_SERVICES_HEALTH_EXIT_CODE: <number>`
+  - `RUN_TESTS_SCRIPT_LINT_EXIT_CODE: <number>`
+  - `RUN_TESTS_EXIT_CODE: <number>`
   - `VERIFIER_SIGNATURE: <sha256>`
 
 **ABSOLUTE LAST OUTPUT RULE**: Promise 标签必须是回复的**最后一行**，后面不得有任何内容。
@@ -30,7 +29,7 @@ allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/scripts/verify-delivery-package.sh:*
 
 - **MANDATORY**: 最终验收必须在交付包上执行，不能复用打包前结论。
 - **MANDATORY**: 必须在 `artifact-truth-gate` 通过后执行本阶段。
-- **MANDATORY**: 任一 FAIL 都必须先修复再复验。
+- **MANDATORY**: 本阶段负责“证据完整性”，`FAIL=0` 的最终放行由 release-readiness-gate 执行。
 - **MANDATORY**: `docker` 不可用或 `docker compose up` 失败视为阻塞失败。
 - **MANDATORY**: `docker compose up -d` 后若任一服务不处于 Up/healthy，视为阻塞失败。
 - **PROHIBITED**: 不允许跳过本阶段，不允许在 FAIL>0 时输出 `DELIVERY_COMPLETE`。
@@ -66,26 +65,25 @@ allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/scripts/verify-delivery-package.sh:*
 
 报告路径：`TASK-{ID}/docs/delivery-check-report.md`
 
-若 `FAIL > 0`：
-1. 修复阻塞项。
+若报告缺失关键证据字段：
+1. 修复脚本/环境问题。
 2. 重新执行 Step 2。
-3. 在本 Phase 内循环直至 `FAIL=0`。
+3. 在本 Phase 内循环直至证据齐全。
 
 ## Exit Criteria
 
 当以下全部满足时，Phase 4.6 完成：
 - `TASK-{ID}/docs/delivery-check-report.md` 存在
-- 报告统计中 `FAIL=0`
 - 报告包含：
-  - `VALIDATE_PACKAGE_EXIT_CODE: 0`
-  - `DOCKER_UP_EXIT_CODE: 0`
-  - `DOCKER_SERVICES_HEALTH_EXIT_CODE: 0`
-  - `RUN_TESTS_SCRIPT_LINT_EXIT_CODE: 0`
-  - `RUN_TESTS_EXIT_CODE: 0`
+  - `VALIDATE_PACKAGE_EXIT_CODE: <number>`
+  - `DOCKER_UP_EXIT_CODE: <number>`
+  - `DOCKER_SERVICES_HEALTH_EXIT_CODE: <number>`
+  - `RUN_TESTS_SCRIPT_LINT_EXIT_CODE: <number>`
+  - `RUN_TESTS_EXIT_CODE: <number>`
   - `VERIFIER_SIGNATURE: <sha256>`
 
 最后一行输出：
-`<promise>DELIVERY_COMPLETE</promise>`
+`<promise>DELIVERY_CHECK_COMPLETE</promise>`
 
 ## References
 

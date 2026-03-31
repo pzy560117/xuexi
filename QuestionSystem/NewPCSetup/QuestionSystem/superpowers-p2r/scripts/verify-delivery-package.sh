@@ -78,6 +78,28 @@ fail_check() {
   add_report_line "- [FAIL] $1"
 }
 
+# Resolve a usable ripgrep command across Linux/macOS/Windows bash environments.
+resolve_rg_command() {
+  if command -v rg >/dev/null 2>&1; then
+    RG_CMD="rg"
+    return 0
+  fi
+  if command -v rg.exe >/dev/null 2>&1; then
+    RG_CMD="rg.exe"
+    return 0
+  fi
+  if command -v where.exe >/dev/null 2>&1; then
+    local rg_win_path=""
+    rg_win_path="$(where.exe rg 2>/dev/null | head -n 1 | tr -d '\r')"
+    if [ -n "$rg_win_path" ] && [ -f "$rg_win_path" ]; then
+      RG_CMD="$rg_win_path"
+      return 0
+    fi
+  fi
+  RG_CMD=""
+  return 1
+}
+
 # Validate required package-level files and directories.
 check_required_structure() {
   local required_paths=(
@@ -300,8 +322,8 @@ check_language_cleanliness() {
     return
   fi
 
-  if command -v rg >/dev/null 2>&1; then
-    if rg -n --no-heading --pcre2 "[\x{4e00}-\x{9fff}]" "$PACKAGE_DIR" \
+  if resolve_rg_command; then
+    if "$RG_CMD" -n --no-heading --pcre2 "[\x{4e00}-\x{9fff}]" "$PACKAGE_DIR" \
       --glob '!.tmp/**' \
       --glob '!.backup/**' \
       --glob '!.git/**' \
@@ -313,8 +335,44 @@ check_language_cleanliness() {
       pass_check "No Chinese characters found in full delivery package"
       ZH_HITS=""
     fi
+  elif command -v python >/dev/null 2>&1; then
+    if python - "$PACKAGE_DIR" >/tmp/delivery-check-zh.txt 2>/dev/null <<'PY'
+import os, re, sys
+root = sys.argv[1]
+pat = re.compile(r'[\u4e00-\u9fff]')
+skip_dirs = {'.git', '.tmp', '.backup'}
+hits = []
+for base, dirs, files in os.walk(root):
+    dirs[:] = [d for d in dirs if d not in skip_dirs]
+    for f in files:
+        path = os.path.join(base, f)
+        try:
+            with open(path, 'r', encoding='utf-8', errors='ignore') as fh:
+                for idx, line in enumerate(fh, 1):
+                    if pat.search(line):
+                        hits.append(f"{path}:{idx}:{line.rstrip()}")
+                        if len(hits) >= 40:
+                            break
+            if len(hits) >= 40:
+                break
+        except Exception:
+            continue
+    if len(hits) >= 40:
+        break
+if hits:
+    print("\n".join(hits))
+    sys.exit(1)
+sys.exit(0)
+PY
+    then
+      pass_check "No Chinese characters found in full delivery package (python fallback)"
+      ZH_HITS=""
+    else
+      fail_check "Chinese characters found in delivery package while prompt_language=en (python fallback, see report appendix)"
+      ZH_HITS="$(head -n 40 /tmp/delivery-check-zh.txt 2>/dev/null)"
+    fi
   else
-    fail_check "rg is unavailable; cannot enforce English-redline scan"
+    fail_check "No scanner available for English-redline (rg/python both unavailable)"
     ZH_HITS=""
   fi
 }
@@ -541,17 +599,53 @@ check_placeholder_secrets() {
     SECRET_HITS=""
     return
   fi
-  if command -v rg >/dev/null 2>&1; then
+  if resolve_rg_command; then
     local pattern='(your-super-secret-key-change-in-production|POSTGRES_PASSWORD:\s*postgres|MYSQL_ROOT_PASSWORD:\s*rootpassword|MYSQL_PASSWORD:\s*petpassword|defaultSecretKeyForDevelopmentOnly)'
-    if rg -n --no-heading --pcre2 "$pattern" "$repo_dir" >/tmp/delivery-check-secret.txt 2>/dev/null; then
+    if "$RG_CMD" -n --no-heading --pcre2 "$pattern" "$repo_dir" >/tmp/delivery-check-secret.txt 2>/dev/null; then
       warn_check "Placeholder/default secret values detected (see report appendix)"
       SECRET_HITS="$(head -n 40 /tmp/delivery-check-secret.txt 2>/dev/null)"
     else
       pass_check "No placeholder/default secrets detected"
       SECRET_HITS=""
     fi
+  elif command -v python >/dev/null 2>&1; then
+    if python - "$repo_dir" >/tmp/delivery-check-secret.txt 2>/dev/null <<'PY'
+import os, re, sys
+root = sys.argv[1]
+pat = re.compile(r'(your-super-secret-key-change-in-production|POSTGRES_PASSWORD:\s*postgres|MYSQL_ROOT_PASSWORD:\s*rootpassword|MYSQL_PASSWORD:\s*petpassword|defaultSecretKeyForDevelopmentOnly)')
+hits = []
+for base, dirs, files in os.walk(root):
+    if '.git' in dirs:
+        dirs.remove('.git')
+    for f in files:
+        path = os.path.join(base, f)
+        try:
+            with open(path, 'r', encoding='utf-8', errors='ignore') as fh:
+                for idx, line in enumerate(fh, 1):
+                    if pat.search(line):
+                        hits.append(f"{path}:{idx}:{line.rstrip()}")
+                        if len(hits) >= 40:
+                            break
+            if len(hits) >= 40:
+                break
+        except Exception:
+            continue
+    if len(hits) >= 40:
+        break
+if hits:
+    print("\n".join(hits))
+    sys.exit(1)
+sys.exit(0)
+PY
+    then
+      pass_check "No placeholder/default secrets detected (python fallback)"
+      SECRET_HITS=""
+    else
+      warn_check "Placeholder/default secret values detected (python fallback, see report appendix)"
+      SECRET_HITS="$(head -n 40 /tmp/delivery-check-secret.txt 2>/dev/null)"
+    fi
   else
-    warn_check "rg is unavailable; skipped placeholder secret scan"
+    warn_check "No scanner available for placeholder secret scan (rg/python unavailable)"
     SECRET_HITS=""
   fi
 }
@@ -662,6 +756,29 @@ write_report() {
       echo '```'
     fi
   } >"$REPORT_FILE"
+
+  local report_json_file=""
+  report_json_file="$(dirname "$REPORT_FILE")/delivery-check-result.json"
+  {
+    echo "{"
+    echo "  \"package\": \"${PACKAGE_DIR}\","
+    echo "  \"generated_at_utc\": \"${now}\","
+    echo "  \"pass\": ${PASS_COUNT},"
+    echo "  \"warn\": ${WARN_COUNT},"
+    echo "  \"fail\": ${FAIL_COUNT},"
+    echo "  \"hard_evidence\": {"
+    echo "    \"validate_package_exit_code\": ${VALIDATE_PACKAGE_EXIT_CODE},"
+    echo "    \"docker_config_exit_code\": ${DOCKER_CONFIG_EXIT_CODE},"
+    echo "    \"docker_up_exit_code\": ${DOCKER_UP_EXIT_CODE},"
+    echo "    \"docker_services_health_exit_code\": ${DOCKER_SERVICES_HEALTH_EXIT_CODE},"
+    echo "    \"docker_down_exit_code\": ${DOCKER_DOWN_EXIT_CODE},"
+    echo "    \"run_tests_script_lint_exit_code\": ${RUN_TESTS_SCRIPT_LINT_EXIT_CODE},"
+    echo "    \"run_tests_exit_code\": ${RUN_TESTS_EXIT_CODE},"
+    echo "    \"verifier_version\": 2,"
+    echo "    \"verifier_signature\": \"${verifier_signature}\""
+    echo "  }"
+    echo "}"
+  } >"$report_json_file"
 }
 
 main() {

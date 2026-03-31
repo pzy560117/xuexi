@@ -25,6 +25,7 @@ allowed-tools: []
 - **MANDATORY**：必须校验“文件系统事实”而不是只看报告文本。
 - **MANDATORY**：如发现报告与事实不一致，必须回到对应轮次修复并重跑。
 - **PROHIBITED**：在目录缺失或报告自相矛盾时放行到 delivery-checker。
+- **PROHIBITED**：跳过 `toolchain-validator-gate` 直接进入最终放行。
 
 ## 执行步骤
 

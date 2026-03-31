@@ -1,0 +1,39 @@
+{
+  "env": {
+    "ANTHROPIC_AUTH_TOKEN": "REPLACE_WITH_YOUR_API_KEY",
+    "ANTHROPIC_BASE_URL": "https://api.minimaxi.com/anthropic",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "MiniMax-M2.7-highspeed",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "MiniMax-M2.7-highspeed",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "MiniMax-M2.7-highspeed",
+    "ANTHROPIC_MODEL": "MiniMax-M2.7-highspeed",
+    "API_TIMEOUT_MS": "600000",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "ECC_HOOK_PROFILE": "standard",
+    "ECC_DISABLED_HOOKS": ""
+  },
+  "includeCoAuthoredBy": false,
+  "permissions": {
+    "allow": [],
+    "deny": []
+  },
+  "model": "opus[1m]",
+  "enabledPlugins": {
+    "superpowers@frad-dotclaude": false,
+    "superpowers@xuexi-local": true
+  },
+  "extraKnownMarketplaces": {
+    "frad-dotclaude": {
+      "source": {
+        "source": "github",
+        "repo": "FradSer/dotclaude"
+      }
+    },
+    "xuexi-local": {
+      "source": {
+        "source": "directory",
+        "path": "REPLACE_WITH_PROJECT_ROOT_PATH"
+      }
+    }
+  },
+  "skipDangerousModePermissionPrompt": true
+}

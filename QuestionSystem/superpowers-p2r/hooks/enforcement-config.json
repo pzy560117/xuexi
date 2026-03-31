@@ -1,0 +1,34 @@
+{
+  "pipeline_state_dir": "docs/runtime",
+  "architecture_dir": "docs/designs",
+  "product_specs_dir": "docs/specs",
+  "ux_docs_dir": "docs/ux",
+  "test_patterns": [
+    "/unit_tests/",
+    "/API_tests/",
+    "/test_",
+    "_test.",
+    "/tests/",
+    ".test.",
+    ".spec."
+  ],
+  "implementer_blocked_paths": [
+    "docs/",
+    ".claude/",
+    ".claude-plugin/",
+    "hooks/",
+    "scripts/",
+    "skills/"
+  ],
+  "reviewer_allowed_paths": [
+    ".tmp/",
+    "docs/runtime/"
+  ],
+  "orchestrator_allowed_paths": [
+    "docs/",
+    ".tmp/",
+    "prompt.md",
+    "metadata.draft.json",
+    "questions.md"
+  ]
+}

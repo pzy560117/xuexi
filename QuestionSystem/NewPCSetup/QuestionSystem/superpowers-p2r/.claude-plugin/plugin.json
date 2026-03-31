@@ -1,0 +1,118 @@
+{
+  "name": "superpowers",
+  "version": "2.4.0",
+  "description": "Prompt2Repo 全自动流水线：从 prompt.md 到完整可交付产物，内嵌验收标准、Docker 生成、AI 自测",
+  "author": {
+    "name": "P2R Team",
+    "email": ""
+  },
+  "license": "MIT",
+  "keywords": [
+    "prompt2repo",
+    "planning",
+    "brainstorming",
+    "bdd",
+    "docker",
+    "delivery",
+    "self-review"
+  ],
+  "commands": [
+    "./skills/brainstorming/",
+    "./skills/writing-plans/",
+    "./skills/executing-plans/",
+    "./skills/prompt-parser/",
+    "./skills/spec-gateway/",
+    "./skills/prompt2repo/",
+    "./skills/writing-plans-p2r/",
+    "./skills/executing-plans-p2r/",
+    "./skills/consistency-gate/",
+    "./skills/domain-checklist/",
+    "./skills/self-review/",
+    "./skills/llm-test-iteration-1/",
+    "./skills/llm-test-iteration-2/",
+    "./skills/llm-test-iteration-3/",
+    "./skills/llm-triple-check-gate/",
+    "./skills/test-gate/",
+    "./skills/runtime-smoke/",
+    "./skills/stability-loop/",
+    "./skills/coverage-gate/",
+    "./skills/policy-gate/",
+    "./skills/delivery-packager/",
+    "./skills/post-package-test-iteration-1/",
+    "./skills/post-package-test-iteration-2/",
+    "./skills/post-package-test-iteration-3/",
+    "./skills/post-package-triple-check-gate/",
+    "./skills/test-truth-gate/",
+    "./skills/artifact-truth-gate/",
+    "./skills/delivery-checker/",
+    "./skills/docker-generator/",
+    "./skills/blind-reviewer/",
+    "./skills/context-distiller/"
+  ],
+  "skills": [
+    "./skills/agent-team-driven-development/",
+    "./skills/behavior-driven-development/",
+    "./skills/build-like-iphone-team/",
+    "./skills/systematic-debugging/",
+    "./skills/docker-generator/",
+    "./skills/prompt-parser/",
+    "./skills/spec-gateway/",
+    "./skills/prompt2repo/",
+    "./skills/writing-plans-p2r/",
+    "./skills/executing-plans-p2r/",
+    "./skills/consistency-gate/",
+    "./skills/domain-checklist/",
+    "./skills/self-review/",
+    "./skills/llm-test-iteration-1/",
+    "./skills/llm-test-iteration-2/",
+    "./skills/llm-test-iteration-3/",
+    "./skills/llm-triple-check-gate/",
+    "./skills/test-gate/",
+    "./skills/runtime-smoke/",
+    "./skills/stability-loop/",
+    "./skills/coverage-gate/",
+    "./skills/policy-gate/",
+    "./skills/delivery-packager/",
+    "./skills/post-package-test-iteration-1/",
+    "./skills/post-package-test-iteration-2/",
+    "./skills/post-package-test-iteration-3/",
+    "./skills/post-package-triple-check-gate/",
+    "./skills/test-truth-gate/",
+    "./skills/artifact-truth-gate/",
+    "./skills/delivery-checker/",
+    "./skills/architect/",
+    "./skills/planner/",
+    "./skills/code-reviewer/",
+    "./skills/tdd-guide/",
+    "./skills/build-error-resolver/",
+    "./skills/security-reviewer/",
+    "./skills/refactor-cleaner/",
+    "./skills/e2e-runner/",
+    "./skills/doc-updater/",
+    "./skills/blind-reviewer/",
+    "./skills/context-distiller/"
+  ],
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/enforce-paths.sh"
+          }
+        ],
+        "description": "按 Agent 角色强制文件路径写入权限，防止并行 Agent 间文件冲突"
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stop-hook.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

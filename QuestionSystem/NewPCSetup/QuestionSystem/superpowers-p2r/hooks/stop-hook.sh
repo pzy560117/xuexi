@@ -35,6 +35,35 @@ ALL_CANDIDATES=()
 USER_HOME_RESOLVED="$(resolve_user_home)"
 REGISTRY_FILE="${USER_HOME_RESOLVED}/.claude/superpower-loop-registry.txt"
 
+# Canonicalize a path for stable deduplication/comparison.
+canonical_path() {
+  local p="$1"
+  [[ -n "$p" ]] || return 1
+  if command -v cygpath >/dev/null 2>&1; then
+    case "$p" in
+      [A-Za-z]:\\*)
+        p="$(cygpath "$p")"
+        ;;
+    esac
+  fi
+  [[ -e "$p" ]] || return 1
+  p="$(cd "$(dirname "$p")" && pwd)/$(basename "$p")"
+  printf '%s\n' "$p"
+}
+
+# Keep ALL_CANDIDATES unique (same file may appear via relative + registry path).
+append_candidate_unique() {
+  local raw="$1"
+  local canon
+  canon="$(canonical_path "$raw" 2>/dev/null || true)"
+  [[ -n "$canon" ]] || return 0
+  local existing
+  for existing in "${ALL_CANDIDATES[@]}"; do
+    [[ "$existing" == "$canon" ]] && return 0
+  done
+  ALL_CANDIDATES+=("$canon")
+}
+
 # Remove stale registry entries (best effort, never block hook flow).
 prune_registry_path() {
   local target="$1"
@@ -97,22 +126,24 @@ PHASE_NAMES=(
   "prompt-parser" "spec-gateway" "writing-plans-p2r" "consistency-gate"
   "executing-plans-p2r" "domain-checklist" "self-review" "llm-test-iteration-1"
   "llm-test-iteration-2" "llm-test-iteration-3" "llm-triple-check-gate"
-  "delivery-packager" "post-package-test-iteration-1" "post-package-test-iteration-2"
-  "post-package-test-iteration-3" "post-package-triple-check-gate" "artifact-truth-gate" "delivery-checker"
+  "test-truth-gate" "delivery-packager" "post-package-test-iteration-1"
+  "post-package-test-iteration-2" "post-package-test-iteration-3"
+  "post-package-triple-check-gate" "artifact-truth-gate" "delivery-checker"
 )
 PHASE_PROMISES=(
   "PROMPT_PARSING_COMPLETE" "SPEC_COMPLETE" "PLANNING_COMPLETE" "ANALYSIS_COMPLETE"
   "EXECUTION_COMPLETE" "CHECKLIST_COMPLETE" "SELF_REVIEW_COMPLETE" "LLM_TEST_R1_COMPLETE"
   "LLM_TEST_R2_COMPLETE" "LLM_TEST_R3_COMPLETE" "LLM_TRIPLE_CHECK_COMPLETE"
-  "PACKAGE_COMPLETE" "POST_PACKAGE_TEST_R1_COMPLETE" "POST_PACKAGE_TEST_R2_COMPLETE"
-  "POST_PACKAGE_TEST_R3_COMPLETE" "POST_PACKAGE_TRIPLE_CHECK_COMPLETE" "ARTIFACT_TRUTH_COMPLETE" "DELIVERY_COMPLETE"
+  "TEST_TRUTH_COMPLETE" "PACKAGE_COMPLETE" "POST_PACKAGE_TEST_R1_COMPLETE"
+  "POST_PACKAGE_TEST_R2_COMPLETE" "POST_PACKAGE_TEST_R3_COMPLETE"
+  "POST_PACKAGE_TRIPLE_CHECK_COMPLETE" "ARTIFACT_TRUTH_COMPLETE" "DELIVERY_COMPLETE"
 )
 PHASE_SKIPPABLE=(
   "no" "yes" "no" "yes"
   "no" "yes" "yes" "no"
   "no" "no" "no"
-  "yes" "no" "no"
-  "no" "no" "no" "no"
+  "no" "yes" "no"
+  "no" "no" "no" "no" "no"
 )
 
 # =============================================================================
@@ -123,7 +154,7 @@ PHASE_SKIPPABLE=(
 PARALLEL_GROUPS=(
   "5:6"         # Wave 3: domain-checklist(5) ∥ self-review(6)
   "7:8:9"       # Wave 4: llm-test R1(7) ∥ R2(8) ∥ R3(9) — 仅 Large 规模
-  "12:13:14"    # Wave 6: post-pkg R1(12) ∥ R2(13) ∥ R3(14) — 仅 Large 规模
+  "13:14:15"    # Wave 6: post-pkg R1(13) ∥ R2(14) ∥ R3(15) — 仅 Large 规模
 )
 
 # 检查一个 Phase 索引是否是某个并行组的成员
@@ -164,16 +195,16 @@ get_adaptive_skip_phases() {
   case "$size" in
     micro)
       # 跳过: spec-gateway(1), consistency-gate(3), domain-checklist(5),
-      #       llm-test R1-R3(7-9), llm-gate(10), post-pkg R1-R3(12-14), post-pkg-gate(15)
-      echo "1,3,5,7,8,9,10,12,13,14,15"
+      #       llm-test R1-R3(7-9), llm-gate(10), post-pkg R1-R3(13-15), post-pkg-gate(16)
+      echo "1,3,5,7,8,9,10,13,14,15,16"
       ;;
     small)
-      # 跳过: consistency-gate(3), llm-test R2-R3(8-9), post-pkg R1-R3(12-14), post-pkg-gate(15)
-      echo "3,8,9,12,13,14,15"
+      # 跳过: consistency-gate(3), llm-test R2-R3(8-9), post-pkg R1-R3(13-15), post-pkg-gate(16)
+      echo "3,8,9,13,14,15,16"
       ;;
     medium)
-      # 跳过: llm-test R3(9), post-pkg R3(14), post-pkg-gate(15)
-      echo "9,14,15"
+      # 跳过: llm-test R3(9), post-pkg R3(15), post-pkg-gate(16)
+      echo "9,15,16"
       ;;
     large)
       # 不跳过任何 Phase
@@ -211,13 +242,14 @@ phase_index_from_name() {
     "llm-test-iteration-2"|"llm test iteration 2"|"runtime-smoke"|"runtime smoke") echo 8 ;;
     "llm-test-iteration-3"|"llm test iteration 3"|"stability-loop"|"stability loop") echo 9 ;;
     "llm-triple-check-gate"|"llm triple check gate"|"coverage-gate"|"coverage gate"|"policy-gate"|"policy gate") echo 10 ;;
-    "delivery-packager"|"delivery packager") echo 11 ;;
-    "post-package-test-iteration-1"|"post package test iteration 1"|"post-package-r1"|"post package r1") echo 12 ;;
-    "post-package-test-iteration-2"|"post package test iteration 2"|"post-package-r2"|"post package r2") echo 13 ;;
-    "post-package-test-iteration-3"|"post package test iteration 3"|"post-package-r3"|"post package r3") echo 14 ;;
-    "post-package-triple-check-gate"|"post package triple check gate"|"post-package-gate"|"post package gate") echo 15 ;;
-    "artifact-truth-gate"|"artifact truth gate"|"artifact-truth"|"artifact truth") echo 16 ;;
-    "delivery-checker"|"delivery checker") echo 17 ;;
+    "test-truth-gate"|"test truth gate") echo 11 ;;
+    "delivery-packager"|"delivery packager") echo 12 ;;
+    "post-package-test-iteration-1"|"post package test iteration 1"|"post-package-r1"|"post package r1") echo 13 ;;
+    "post-package-test-iteration-2"|"post package test iteration 2"|"post-package-r2"|"post package r2") echo 14 ;;
+    "post-package-test-iteration-3"|"post package test iteration 3"|"post-package-r3"|"post package r3") echo 15 ;;
+    "post-package-triple-check-gate"|"post package triple check gate"|"post-package-gate"|"post package gate") echo 16 ;;
+    "artifact-truth-gate"|"artifact truth gate"|"artifact-truth"|"artifact truth") echo 17 ;;
+    "delivery-checker"|"delivery checker") echo 18 ;;
     *)
       return 1
       ;;
@@ -354,13 +386,14 @@ recover_state_from_legacy_status_markdown() {
     "Phase 3.6 (runtime-smoke)"|"Phase 3.6 (llm-test-iteration-2)") phase_idx=8 ;;
     "Phase 3.7 (stability-loop)"|"Phase 3.7 (llm-test-iteration-3)") phase_idx=9 ;;
     "Phase 3.8 (coverage-gate)"|"Phase 3.9 (policy-gate)"|"Phase 3.8 (llm-triple-check-gate)") phase_idx=10 ;;
-    "Phase 4 (delivery-packager)") phase_idx=11 ;;
-    "Phase 4.1 (post-package-test-iteration-1)") phase_idx=12 ;;
-    "Phase 4.2 (post-package-test-iteration-2)") phase_idx=13 ;;
-    "Phase 4.3 (post-package-test-iteration-3)") phase_idx=14 ;;
-    "Phase 4.4 (post-package-triple-check-gate)") phase_idx=15 ;;
-    "Phase 4.5 (artifact-truth-gate)") phase_idx=16 ;;
-    "Phase 4.6 (delivery-checker)"|"Phase 4.5 (delivery-checker)") phase_idx=17 ;;
+    "Phase 3.9 (test-truth-gate)") phase_idx=11 ;;
+    "Phase 4 (delivery-packager)") phase_idx=12 ;;
+    "Phase 4.1 (post-package-test-iteration-1)") phase_idx=13 ;;
+    "Phase 4.2 (post-package-test-iteration-2)") phase_idx=14 ;;
+    "Phase 4.3 (post-package-test-iteration-3)") phase_idx=15 ;;
+    "Phase 4.4 (post-package-triple-check-gate)") phase_idx=16 ;;
+    "Phase 4.5 (artifact-truth-gate)") phase_idx=17 ;;
+    "Phase 4.6 (delivery-checker)"|"Phase 4.5 (delivery-checker)") phase_idx=18 ;;
     *) return 1 ;;
   esac
   local state_path="$SUPERPOWER_STATE_FILE"
@@ -717,19 +750,30 @@ phase_label_from_index() {
     8) echo "Phase 3.6" ;;
     9) echo "Phase 3.7" ;;
     10) echo "Phase 3.8" ;;
-    11) echo "Phase 4" ;;
-    12) echo "Phase 4.1" ;;
-    13) echo "Phase 4.2" ;;
-    14) echo "Phase 4.3" ;;
-    15) echo "Phase 4.4" ;;
-    16) echo "Phase 4.5" ;;
-    17) echo "Phase 4.6" ;;
+    11) echo "Phase 3.9" ;;
+    12) echo "Phase 4" ;;
+    13) echo "Phase 4.1" ;;
+    14) echo "Phase 4.2" ;;
+    15) echo "Phase 4.3" ;;
+    16) echo "Phase 4.4" ;;
+    17) echo "Phase 4.5" ;;
+    18) echo "Phase 4.6" ;;
     *) echo "" ;;
   esac
 }
 
 latest_task_dir() {
   ls -1dt TASK-* 2>/dev/null | head -n 1
+}
+
+# Accept both legacy and canonical packaged test directory layouts.
+repo_test_dirs_ok() {
+  local task_dir="$1"
+  [[ -n "$task_dir" ]] || return 1
+  (
+    [[ -d "$task_dir/repo/unit_tests" && -d "$task_dir/repo/API_tests" ]] || \
+    [[ -d "$task_dir/repo/tests/unit_tests" && -d "$task_dir/repo/tests/API_tests" ]]
+  )
 }
 
 # Validate report contains an explicit PASS verdict marker.
@@ -786,7 +830,10 @@ delivery_checker_report_ok() {
   grep -Eiq 'FAIL[=:][[:space:]]*0|FAIL\)[[:space:]]*:?[[:space:]]*0' "$report_file" || return 1
   grep -Eiq 'VALIDATE_PACKAGE_EXIT_CODE:[[:space:]]*0' "$report_file" || return 1
   grep -Eiq 'DOCKER_UP_EXIT_CODE:[[:space:]]*0' "$report_file" || return 1
+  grep -Eiq 'DOCKER_SERVICES_HEALTH_EXIT_CODE:[[:space:]]*0' "$report_file" || return 1
   grep -Eiq 'RUN_TESTS_EXIT_CODE:[[:space:]]*0' "$report_file" || return 1
+  grep -Eiq 'RUN_TESTS_SCRIPT_LINT_EXIT_CODE:[[:space:]]*0' "$report_file" || return 1
+  grep -Eiq 'VERIFIER_SIGNATURE:[[:space:]]*[0-9a-f]{32,}' "$report_file" || return 1
   report_no_contradiction_ok "$report_file" || return 1
   return 0
 }
@@ -855,6 +902,13 @@ phase_artifacts_ok() {
       [[ -f ".tmp/llm-triple-check-gate.md" ]] || missing+=(".tmp/llm-triple-check-gate.md")
       report_pass_marker_ok ".tmp/llm-triple-check-gate.md" || missing+=(".tmp/llm-triple-check-gate.md(FINAL_VERDICT: PASS)")
       ;;
+    "test-truth-gate")
+      [[ -f ".tmp/test-truth-gate.md" ]] || missing+=(".tmp/test-truth-gate.md")
+      report_pass_marker_ok ".tmp/test-truth-gate.md" || missing+=(".tmp/test-truth-gate.md(FINAL_VERDICT: PASS)")
+      grep -Eiq 'TEST_RUN_1_EXIT_CODE:[[:space:]]*0' ".tmp/test-truth-gate.md" || missing+=(".tmp/test-truth-gate.md(TEST_RUN_1_EXIT_CODE: 0)")
+      grep -Eiq 'TEST_RUN_2_EXIT_CODE:[[:space:]]*0' ".tmp/test-truth-gate.md" || missing+=(".tmp/test-truth-gate.md(TEST_RUN_2_EXIT_CODE: 0)")
+      grep -Eiq 'RUN_TESTS_SCRIPT_LINT_EXIT_CODE:[[:space:]]*0' ".tmp/test-truth-gate.md" || missing+=(".tmp/test-truth-gate.md(RUN_TESTS_SCRIPT_LINT_EXIT_CODE: 0)")
+      ;;
     "delivery-packager")
       local d
       d="$(latest_task_dir)"
@@ -865,8 +919,8 @@ phase_artifacts_ok() {
     "post-package-test-iteration-1")
       local d_r1
       d_r1="$(latest_task_dir)"
-      [[ -n "$d_r1" && -d "$d_r1/repo/unit_tests" ]] || missing+=("TASK-*/repo/unit_tests")
-      [[ -n "$d_r1" && -d "$d_r1/repo/API_tests" ]] || missing+=("TASK-*/repo/API_tests")
+      [[ -n "$d_r1" ]] || missing+=("TASK-*")
+      repo_test_dirs_ok "$d_r1" || missing+=("TASK-*/repo/(tests/)unit_tests + API_tests")
       [[ -f ".tmp/post-package-r1-main.md" ]] || missing+=(".tmp/post-package-r1-main.md")
       [[ -f ".tmp/post-package-r1-subagent.md" ]] || missing+=(".tmp/post-package-r1-subagent.md")
       report_pass_marker_ok ".tmp/post-package-r1-main.md" || missing+=(".tmp/post-package-r1-main.md(FINAL_VERDICT: PASS)")
@@ -878,8 +932,8 @@ phase_artifacts_ok() {
     "post-package-test-iteration-2")
       local d_r2
       d_r2="$(latest_task_dir)"
-      [[ -n "$d_r2" && -d "$d_r2/repo/unit_tests" ]] || missing+=("TASK-*/repo/unit_tests")
-      [[ -n "$d_r2" && -d "$d_r2/repo/API_tests" ]] || missing+=("TASK-*/repo/API_tests")
+      [[ -n "$d_r2" ]] || missing+=("TASK-*")
+      repo_test_dirs_ok "$d_r2" || missing+=("TASK-*/repo/(tests/)unit_tests + API_tests")
       [[ -f ".tmp/post-package-r2-main.md" ]] || missing+=(".tmp/post-package-r2-main.md")
       [[ -f ".tmp/post-package-r2-subagent.md" ]] || missing+=(".tmp/post-package-r2-subagent.md")
       report_pass_marker_ok ".tmp/post-package-r2-main.md" || missing+=(".tmp/post-package-r2-main.md(FINAL_VERDICT: PASS)")
@@ -891,8 +945,8 @@ phase_artifacts_ok() {
     "post-package-test-iteration-3")
       local d_r3
       d_r3="$(latest_task_dir)"
-      [[ -n "$d_r3" && -d "$d_r3/repo/unit_tests" ]] || missing+=("TASK-*/repo/unit_tests")
-      [[ -n "$d_r3" && -d "$d_r3/repo/API_tests" ]] || missing+=("TASK-*/repo/API_tests")
+      [[ -n "$d_r3" ]] || missing+=("TASK-*")
+      repo_test_dirs_ok "$d_r3" || missing+=("TASK-*/repo/(tests/)unit_tests + API_tests")
       [[ -f ".tmp/post-package-r3-main.md" ]] || missing+=(".tmp/post-package-r3-main.md")
       [[ -f ".tmp/post-package-r3-subagent.md" ]] || missing+=(".tmp/post-package-r3-subagent.md")
       report_pass_marker_ok ".tmp/post-package-r3-main.md" || missing+=(".tmp/post-package-r3-main.md(FINAL_VERDICT: PASS)")
@@ -904,8 +958,8 @@ phase_artifacts_ok() {
     "post-package-triple-check-gate")
       local d_tg
       d_tg="$(latest_task_dir)"
-      [[ -n "$d_tg" && -d "$d_tg/repo/unit_tests" ]] || missing+=("TASK-*/repo/unit_tests")
-      [[ -n "$d_tg" && -d "$d_tg/repo/API_tests" ]] || missing+=("TASK-*/repo/API_tests")
+      [[ -n "$d_tg" ]] || missing+=("TASK-*")
+      repo_test_dirs_ok "$d_tg" || missing+=("TASK-*/repo/(tests/)unit_tests + API_tests")
       [[ -f ".tmp/post-package-triple-check-gate.md" ]] || missing+=(".tmp/post-package-triple-check-gate.md")
       report_pass_marker_ok ".tmp/post-package-triple-check-gate.md" || missing+=(".tmp/post-package-triple-check-gate.md(FINAL_VERDICT: PASS)")
       report_no_contradiction_ok ".tmp/post-package-triple-check-gate.md" || missing+=(".tmp/post-package-triple-check-gate.md(no-contradiction)")
@@ -914,8 +968,7 @@ phase_artifacts_ok() {
       local d_ag
       d_ag="$(latest_task_dir)"
       [[ -n "$d_ag" ]] || missing+=("TASK-*")
-      [[ -n "$d_ag" && -d "$d_ag/repo/unit_tests" ]] || missing+=("TASK-*/repo/unit_tests")
-      [[ -n "$d_ag" && -d "$d_ag/repo/API_tests" ]] || missing+=("TASK-*/repo/API_tests")
+      repo_test_dirs_ok "$d_ag" || missing+=("TASK-*/repo/(tests/)unit_tests + API_tests")
       [[ -f ".tmp/artifact-truth-gate.md" ]] || missing+=(".tmp/artifact-truth-gate.md")
       report_pass_marker_ok ".tmp/artifact-truth-gate.md" || missing+=(".tmp/artifact-truth-gate.md(FINAL_VERDICT: PASS)")
       report_no_contradiction_ok ".tmp/artifact-truth-gate.md" || missing+=(".tmp/artifact-truth-gate.md(no-contradiction)")
@@ -924,8 +977,7 @@ phase_artifacts_ok() {
       local d2
       d2="$(latest_task_dir)"
       [[ -n "$d2" ]] || missing+=("TASK-*")
-      [[ -n "$d2" && -d "$d2/repo/unit_tests" ]] || missing+=("TASK-*/repo/unit_tests")
-      [[ -n "$d2" && -d "$d2/repo/API_tests" ]] || missing+=("TASK-*/repo/API_tests")
+      repo_test_dirs_ok "$d2" || missing+=("TASK-*/repo/(tests/)unit_tests + API_tests")
       [[ -n "$d2" && -f "$d2/docs/delivery-check-report.md" ]] || missing+=("TASK-*/docs/delivery-check-report.md")
       delivery_checker_report_ok "$d2/docs/delivery-check-report.md" || missing+=("TASK-*/docs/delivery-check-report.md(FAIL=0 + hard-evidence)")
       ;;
@@ -997,6 +1049,20 @@ AUTO-REPAIR PLAN (Phase 3.8):
 4) Do NOT ask user for confirmation; repair and retry now.
 EOF
       ;;
+    "test-truth-gate")
+      cat <<'EOF'
+AUTO-REPAIR PLAN (Phase 3.9):
+1) Re-run real test commands twice and record both exits:
+   TEST_RUN_1_EXIT_CODE / TEST_RUN_2_EXIT_CODE must both be 0.
+2) Audit run_tests scripts:
+   - run_tests.sh must not contain '|| true'
+   - run_tests.bat must have errorlevel-based fail-fast
+3) Regenerate .tmp/test-truth-gate.md with:
+   FINAL_VERDICT: PASS
+   RUN_TESTS_SCRIPT_LINT_EXIT_CODE: 0
+4) Do NOT ask user for confirmation; repair and retry now.
+EOF
+      ;;
     "post-package-test-iteration-1")
       cat <<'EOF'
 AUTO-REPAIR PLAN (Phase 4.1):
@@ -1063,8 +1129,9 @@ EOF
     "artifact-truth-gate")
       cat <<'EOF'
 AUTO-REPAIR PLAN (Phase 4.5):
-1) Verify latest TASK package has real directories:
-   TASK-*/repo/unit_tests and TASK-*/repo/API_tests
+1) Verify latest TASK package has real test directories:
+   preferred: TASK-*/repo/tests/unit_tests + TASK-*/repo/tests/API_tests
+   compatible: TASK-*/repo/unit_tests + TASK-*/repo/API_tests
 2) Cross-check post-package reports do not use contradiction text while claiming PASS.
 3) Generate .tmp/artifact-truth-gate.md with FINAL_VERDICT: PASS only when filesystem truth matches reports.
 4) If mismatch exists, return to corresponding post-package iteration and rerun.
@@ -1078,7 +1145,10 @@ AUTO-REPAIR PLAN (Phase 4.6):
 3) Verify report has FAIL=0 and hard evidence lines:
    VALIDATE_PACKAGE_EXIT_CODE: 0
    DOCKER_UP_EXIT_CODE: 0
+   DOCKER_SERVICES_HEALTH_EXIT_CODE: 0
+   RUN_TESTS_SCRIPT_LINT_EXIT_CODE: 0
    RUN_TESTS_EXIT_CODE: 0
+   VERIFIER_SIGNATURE: <sha256>
 4) If not satisfied, fix issues and rerun delivery-checker in current phase.
 5) Do NOT ask user for confirmation; repair and retry now.
 EOF
@@ -1172,10 +1242,13 @@ output_has_global_completion_hint() {
 inspect_candidate() {
   local candidate="$1"
   [[ -f "$candidate" ]] || return 1
-  ALL_CANDIDATES+=("$candidate")
+  local candidate_canon
+  candidate_canon="$(canonical_path "$candidate" 2>/dev/null || true)"
+  [[ -n "$candidate_canon" ]] || candidate_canon="$candidate"
+  append_candidate_unique "$candidate_canon"
   # Normalize UTF-8 BOM on first line before parsing frontmatter.
   local candidate_content
-  candidate_content=$(awk 'NR==1{sub(/^\xef\xbb\xbf/,"")} {print}' "$candidate")
+  candidate_content=$(awk 'NR==1{sub(/^\xef\xbb\xbf/,"")} {print}' "$candidate_canon")
   local candidate_frontmatter
   candidate_frontmatter=$(printf '%s\n' "$candidate_content" | sed -n '/^---$/,/^---$/{ /^---$/d; p; }')
   local candidate_session
@@ -1185,7 +1258,7 @@ inspect_candidate() {
   candidate_session=$(printf '%s' "$candidate_session" | perl -pe 's/\r$//; s/^\s+|\s+$//g; s/^"(.*)"$/$1/; s/^\x27(.*)\x27$/$1/;')
   # Match explicit session_id, or fall through for legacy files without one.
   if [[ -z "$candidate_session" ]] || [[ "$candidate_session" == "$HOOK_SESSION" ]]; then
-    SUPERPOWER_STATE_FILE="$candidate"
+    SUPERPOWER_STATE_FILE="$candidate_canon"
     return 0
   fi
   return 1
